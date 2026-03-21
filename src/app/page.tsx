@@ -71,6 +71,8 @@ export default function Dashboard() {
 }
 
 function AuditView({ auditId }: { auditId: Id<"website_audits"> }) {
+  const [activeTab, setActiveTab] = useState<"analysis" | "scoring" | "improvements">("analysis");
+  const [hoveredFinding, setHoveredFinding] = useState<number | null>(null);
   const audit = useQuery(api.audits.getAudit, { id: auditId });
   const reports = useQuery(api.audits.getPersonaReports, { auditId });
   const screenshotUrl = useQuery(
@@ -105,23 +107,48 @@ function AuditView({ auditId }: { auditId: Id<"website_audits"> }) {
         </div>
       </header>
 
-      <main className="flex-1 flex overflow-hidden">
-        {/* Left Panel: Live View */}
-        <div className="flex-1 p-6 overflow-auto border-r bg-gray-50">
-          <h2 className="text-lg font-semibold mb-4">Live View (Visual Sensor)</h2>
-          
-          {audit.status === "failed" && (
-            <div className="bg-red-50 text-red-600 p-4 rounded-md mb-4 border border-red-200">
-              <p className="font-semibold">Audit failed</p>
-              <p className="text-sm mt-1">There was an error while trying to run the audit.</p>
-              {audit.error_message && (
-                <p className="text-xs mt-2 font-mono bg-red-100 p-2 rounded">{audit.error_message}</p>
-              )}
-            </div>
-          )}
+      <main className="flex-1 flex flex-col overflow-hidden">
+        {/* Tabs Navigation */}
+        <div className="bg-white border-b px-6 flex gap-6">
+          <button 
+            className={`py-3 font-medium text-sm border-b-2 transition-colors ${activeTab === 'analysis' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-800'}`}
+            onClick={() => setActiveTab('analysis')}
+          >
+            Analysis (Live View)
+          </button>
+          <button 
+            className={`py-3 font-medium text-sm border-b-2 transition-colors ${activeTab === 'scoring' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-800'} ${audit.status !== 'completed' ? 'opacity-50 cursor-not-allowed' : ''}`}
+            onClick={() => audit.status === 'completed' && setActiveTab('scoring')}
+          >
+            Scoring Details
+          </button>
+          <button 
+            className={`py-3 font-medium text-sm border-b-2 transition-colors ${activeTab === 'improvements' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-800'} ${audit.status !== 'completed' ? 'opacity-50 cursor-not-allowed' : ''}`}
+            onClick={() => audit.status === 'completed' && setActiveTab('improvements')}
+          >
+            Actionable Improvements
+          </button>
+        </div>
+
+        <div className="flex-1 flex overflow-hidden">
+          {/* Main Content Area */}
+          <div className="flex-1 p-6 overflow-auto border-r bg-gray-50">
+            {activeTab === 'analysis' && (
+              <>
+                <h2 className="text-lg font-semibold mb-4">Live View (Visual Sensor)</h2>
+                
+                {audit.status === "failed" && (
+                  <div className="bg-red-50 text-red-600 p-4 rounded-md mb-4 border border-red-200">
+                    <p className="font-semibold">Audit failed</p>
+                    <p className="text-sm mt-1">There was an error while trying to run the audit.</p>
+                    {audit.error_message && (
+                      <p className="text-xs mt-2 font-mono bg-red-100 p-2 rounded">{audit.error_message}</p>
+                    )}
+                  </div>
+                )}
 
           <div className="bg-white rounded-lg shadow-sm border overflow-auto relative" style={{ minHeight: '600px' }}>
-            {!screenshotUrl && audit.status !== "failed" && (
+            {!screenshotUrl && audit.status !== "failed" && audit.status !== "completed" && (
               <div className="absolute inset-0 z-10">
                 <iframe 
                   src={audit.url.startsWith('http') ? audit.url : `https://${audit.url}`} 
@@ -138,142 +165,267 @@ function AuditView({ auditId }: { auditId: Id<"website_audits"> }) {
             )}
             
             {audit.status === "analyzing" && screenshotUrl && (
-              <div className="absolute inset-0 flex items-center justify-center flex-col text-gray-400 z-20 bg-white/80">
-                <Loader2 className="w-8 h-8 animate-spin mb-2" />
-                <p>AI experts are analyzing...</p>
+              <div className="absolute inset-0 flex items-center justify-center flex-col text-gray-800 z-20 bg-white/60 backdrop-blur-md">
+                <Loader2 className="w-10 h-10 animate-spin mb-3 text-blue-600" />
+                <p className="font-medium text-lg drop-shadow-sm">AI experts are analyzing...</p>
+                <p className="text-sm mt-2 text-gray-700 font-medium">Reading the extracted DOM and generating reports</p>
               </div>
             )}
-            
-            {audit.simplifiedHtml && audit.status === "completed" && (
-                <div className="absolute top-4 left-4 right-4 bg-white/95 backdrop-blur p-4 rounded-md shadow-lg border border-gray-200 text-sm max-h-64 overflow-auto z-10">
-                    <div className="flex justify-between items-center mb-2 sticky top-0 bg-white/95 pb-2 border-b">
-                        <h3 className="font-bold text-gray-800 flex items-center gap-2">
-                            <MonitorSmartphone className="w-4 h-4" />
-                            Extracted DOM Tree for AI (Visual Sensor)
-                        </h3>
-                    </div>
-                    <pre className="text-xs text-gray-600 font-mono whitespace-pre-wrap">
-                        {audit.simplifiedHtml}
-                    </pre>
-                </div>
-            )}
-            
-            {screenshotUrl && (
-              <div className="relative inline-block">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img 
-                  src={screenshotUrl} 
-                  alt="Website screenshot" 
-                  className="max-w-none block"
-                  style={{ width: '1280px' }} // Match playwright viewport
-                />
-                
-                {/* Overlay SVGs for flaws */}
-                <svg className="absolute inset-0 w-full h-full pointer-events-none">
-                  {allFindings.map((finding, idx) => {
-                    const cx = finding.coordinates.x + (finding.coordinates.width || 0) / 2;
-                    const cy = finding.coordinates.y + (finding.coordinates.height || 0) / 2;
-                    // Fallback if width/height missing: just use x,y
-                    const finalCx = isNaN(cx) ? finding.coordinates.x : cx;
-                    const finalCy = isNaN(cy) ? finding.coordinates.y : cy;
-
-                    let color = "red";
-                    if (finding.persona === "Senior") color = "orange";
-                    if (finding.persona === "A11y") color = "purple";
-                    if (finding.persona === "Pro") color = "blue";
-
-                    return (
-                      <g key={idx}>
-                        <circle
-                          cx={finalCx}
-                          cy={finalCy}
-                          r="20"
-                          fill="transparent"
-                          stroke={color}
-                          strokeWidth="3"
-                          className="animate-pulse"
-                        />
-                        <text x={finalCx + 25} y={finalCy + 5} fill={color} fontSize="14" fontWeight="bold" className="bg-white px-1 drop-shadow-md">
-                          {idx + 1}
-                        </text>
-                      </g>
-                    );
-                  })}
-                </svg>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Right Panel: Persona Feeds */}
-        <div className="w-[400px] bg-white flex flex-col overflow-hidden">
-          <div className="p-4 border-b">
-            <h2 className="text-lg font-semibold">Panel of Experts</h2>
-          </div>
-          
-          <div className="flex-1 overflow-auto p-4 space-y-6 bg-gray-50">
-            {audit.status === "analyzing" && reports?.length === 0 && (
-              <div className="flex items-center text-gray-500 justify-center h-20">
-                <Loader2 className="w-5 h-5 animate-spin mr-2" />
-                Agents are analyzing...
-              </div>
-            )}
-
-            {reports?.map((report) => {
-              let icon;
-              let title;
-              let avatarBg;
-              
-              if (report.persona_type === "Senior") {
-                icon = <UserCircle className="w-6 h-6 text-orange-600" />;
-                title = "Oma Schmidt";
-                avatarBg = "bg-orange-100";
-              } else if (report.persona_type === "A11y") {
-                icon = <Scale className="w-6 h-6 text-purple-600" />;
-                title = "Legal Advisor";
-                avatarBg = "bg-purple-100";
-              } else {
-                icon = <MonitorSmartphone className="w-6 h-6 text-blue-600" />;
-                title = "Digital Native";
-                avatarBg = "bg-blue-100";
-              }
-
-              return (
-                <div key={report._id} className="bg-white rounded-lg p-4 shadow-sm border">
-                  <div className="flex items-center gap-3 mb-3">
-                    <div className={`p-2 rounded-full ${avatarBg}`}>
-                      {icon}
-                    </div>
-                    <div>
-                      <h3 className="font-semibold text-gray-900">{title}</h3>
-                      <div className="text-xs text-gray-500">Score: {report.score}/100</div>
-                    </div>
-                  </div>
                   
-                  <div className="bg-gray-50 rounded p-3 text-sm text-gray-700 italic border-l-4 border-gray-300 mb-3">
-                    &quot;{report.summary_en || report.summary_de}&quot;
-                  </div>
+                  {audit.simplifiedHtml && audit.status === "completed" && (
+                      <div className="absolute top-4 left-4 right-4 bg-white/95 backdrop-blur p-4 rounded-md shadow-lg border border-gray-200 text-sm max-h-64 overflow-auto z-10 hidden">
+                          <div className="flex justify-between items-center mb-2 sticky top-0 bg-white/95 pb-2 border-b">
+                              <h3 className="font-bold text-gray-800 flex items-center gap-2">
+                                  <MonitorSmartphone className="w-4 h-4" />
+                                  Extracted DOM Tree for AI (Visual Sensor)
+                              </h3>
+                          </div>
+                          <pre className="text-xs text-gray-600 font-mono whitespace-pre-wrap">
+                              {audit.simplifiedHtml}
+                          </pre>
+                      </div>
+                  )}
+                  
+                  {screenshotUrl && audit.status === "completed" && (
+                    <div className="relative inline-block mt-4 ml-4">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img 
+                        src={screenshotUrl} 
+                        alt="Website screenshot" 
+                        className="max-w-none block shadow-2xl rounded-md border border-gray-200"
+                        style={{ width: '1280px' }} // Match playwright viewport
+                      />
+                      
+                      {/* Overlay SVGs for flaws */}
+                      <div className="absolute inset-0 w-full h-full">
+                        {allFindings.map((finding, idx) => {
+                          // Default to some size if width/height is missing, though they shouldn't be
+                          const width = finding.coordinates.width || 40;
+                          const height = finding.coordinates.height || 40;
+                          const x = finding.coordinates.x;
+                          const y = finding.coordinates.y;
 
-                  {report.findings.length > 0 && (
-                    <div className="space-y-2">
-                      <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Findings:</h4>
-                      <ul className="text-sm space-y-2">
-                        {report.findings.map((f, i) => (
-                          <li key={i} className="flex gap-2">
-                            <span className="text-red-500 font-bold">•</span>
-                            <span className="text-gray-700">{f.issue}</span>
-                          </li>
-                        ))}
-                      </ul>
+                          let color = "red";
+                          let colorHex = "#ef4444";
+                          let bgColorHex = "rgba(239, 68, 68, 0.2)";
+                          
+                          if (finding.persona === "Senior") { color = "orange"; colorHex = "#f97316"; bgColorHex = "rgba(249, 115, 22, 0.2)"; }
+                          if (finding.persona === "A11y") { color = "purple"; colorHex = "#a855f7"; bgColorHex = "rgba(168, 85, 247, 0.2)"; }
+                          if (finding.persona === "Pro") { color = "blue"; colorHex = "#3b82f6"; bgColorHex = "rgba(59, 130, 246, 0.2)"; }
+
+                          const isHovered = hoveredFinding === idx;
+
+                          return (
+                            <div 
+                              key={idx}
+                              className="absolute cursor-pointer transition-all duration-200 ease-in-out"
+                              style={{
+                                left: `${x}px`,
+                                top: `${y}px`,
+                                width: `${width}px`,
+                                height: `${height}px`,
+                                border: `3px solid ${colorHex}`,
+                                backgroundColor: isHovered ? bgColorHex : 'transparent',
+                                zIndex: isHovered ? 50 : 10,
+                                borderRadius: '4px',
+                                boxShadow: isHovered ? `0 0 15px ${colorHex}` : 'none'
+                              }}
+                              onMouseEnter={() => setHoveredFinding(idx)}
+                              onMouseLeave={() => setHoveredFinding(null)}
+                            >
+                              {/* Number Badge */}
+                              <div 
+                                className="absolute -top-3 -left-3 text-white font-bold rounded-full w-6 h-6 flex items-center justify-center text-xs shadow-md"
+                                style={{ backgroundColor: colorHex }}
+                              >
+                                {idx + 1}
+                              </div>
+
+                              {/* Tooltip */}
+                              {isHovered && (
+                                <div 
+                                  className="absolute bg-white text-gray-900 p-4 rounded-lg shadow-2xl border border-gray-200 w-80 pointer-events-none"
+                                  style={{
+                                    top: '100%',
+                                    left: '50%',
+                                    transform: 'translateX(-50%)',
+                                    marginTop: '8px'
+                                  }}
+                                >
+                                  <div className="flex items-center gap-2 mb-2">
+                                    <span className="text-xs font-bold uppercase tracking-wider px-2 py-1 rounded" style={{ backgroundColor: bgColorHex, color: colorHex }}>
+                                      {finding.persona}
+                                    </span>
+                                    {finding.severity && (
+                                      <span className="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded uppercase tracking-wider font-semibold">
+                                        {finding.severity}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <p className="text-sm text-gray-800 leading-relaxed font-medium">
+                                    {finding.issue}
+                                  </p>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
                     </div>
                   )}
                 </div>
-              );
-            })}
-            
-            {audit.status === "completed" && reports?.length === 0 && (
-              <div className="text-center text-gray-500">No reports generated.</div>
+              </>
             )}
+
+            {activeTab === 'scoring' && (
+              <div className="space-y-6 max-w-4xl mx-auto">
+                <h2 className="text-2xl font-bold text-gray-900 mb-6">Detailed Scoring & Analysis</h2>
+                {reports?.map((report) => {
+                  let icon;
+                  let title;
+                  let color;
+                  
+                  if (report.persona_type === "Senior") {
+                    icon = <UserCircle className="w-6 h-6 text-orange-600" />;
+                    title = "Oma Schmidt (Senior)";
+                    color = "orange";
+                  } else if (report.persona_type === "A11y") {
+                    icon = <Scale className="w-6 h-6 text-purple-600" />;
+                    title = "Legal Advisor (A11y)";
+                    color = "purple";
+                  } else {
+                    icon = <MonitorSmartphone className="w-6 h-6 text-blue-600" />;
+                    title = "Digital Native (Pro)";
+                    color = "blue";
+                  }
+
+                  return (
+                    <div key={report._id} className="bg-white rounded-xl shadow-sm border p-6">
+                      <div className="flex items-center justify-between mb-4">
+                        <div className="flex items-center gap-3">
+                          <div className={`p-3 rounded-full bg-${color}-100`}>
+                            {icon}
+                          </div>
+                          <h3 className="text-xl font-bold text-gray-900">{title}</h3>
+                        </div>
+                        <div className="text-2xl font-black text-gray-800">
+                          Score: {report.score}/100
+                        </div>
+                      </div>
+                      <div className="prose max-w-none text-gray-700 bg-gray-50 p-4 rounded-lg border">
+                        <p>{report.summary_en || report.summary_de}</p>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {activeTab === 'improvements' && (
+              <div className="space-y-6 max-w-4xl mx-auto">
+                <h2 className="text-2xl font-bold text-gray-900 mb-6">Actionable Improvements</h2>
+                <div className="bg-white rounded-xl shadow-sm border overflow-hidden">
+                  {allFindings.length === 0 ? (
+                    <div className="p-8 text-center text-gray-500">No issues found. Perfect score!</div>
+                  ) : (
+                    <ul className="divide-y divide-gray-100">
+                      {allFindings.map((f, i) => {
+                        let color = "red";
+                        if (f.persona === "Senior") color = "orange";
+                        if (f.persona === "A11y") color = "purple";
+                        if (f.persona === "Pro") color = "blue";
+                        
+                        return (
+                          <li key={i} className="p-6 hover:bg-gray-50 transition-colors flex gap-4">
+                            <div className={`flex-shrink-0 w-8 h-8 rounded-full bg-${color}-100 text-${color}-600 flex items-center justify-center font-bold text-sm`}>
+                              {i + 1}
+                            </div>
+                            <div>
+                              <div className="flex items-center gap-2 mb-2">
+                                <span className={`text-xs font-semibold px-2 py-1 rounded bg-${color}-50 text-${color}-700 uppercase tracking-wider`}>
+                                  {f.persona}
+                                </span>
+                                {f.severity && (
+                                  <span className="text-xs text-gray-500 capitalize bg-gray-100 px-2 py-1 rounded">
+                                    {f.severity} severity
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-gray-800 text-base">{f.issue}</p>
+                            </div>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Right Panel: Simplified Persona Feeds */}
+          <div className="w-[350px] bg-white flex flex-col overflow-hidden">
+            <div className="p-4 border-b">
+              <h2 className="text-lg font-semibold text-gray-900">Panel of Experts</h2>
+              <p className="text-xs text-gray-500 mt-1">High-level overview</p>
+            </div>
+            
+            <div className="flex-1 overflow-auto p-4 space-y-4 bg-gray-50">
+              {audit.status === "analyzing" && reports?.length === 0 && (
+                <div className="flex items-center text-gray-500 justify-center h-20">
+                  <Loader2 className="w-5 h-5 animate-spin mr-2" />
+                  Analyzing...
+                </div>
+              )}
+
+              {reports?.map((report) => {
+                let icon;
+                let title;
+                let avatarBg;
+                
+                if (report.persona_type === "Senior") {
+                  icon = <UserCircle className="w-6 h-6 text-orange-600" />;
+                  title = "Oma Schmidt";
+                  avatarBg = "bg-orange-100";
+                } else if (report.persona_type === "A11y") {
+                  icon = <Scale className="w-6 h-6 text-purple-600" />;
+                  title = "Legal Advisor";
+                  avatarBg = "bg-purple-100";
+                } else {
+                  icon = <MonitorSmartphone className="w-6 h-6 text-blue-600" />;
+                  title = "Digital Native";
+                  avatarBg = "bg-blue-100";
+                }
+
+                return (
+                  <div key={report._id} className="bg-white rounded-lg p-4 shadow-sm border border-gray-100 hover:shadow-md transition-shadow">
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="flex items-center gap-3">
+                        <div className={`p-2 rounded-full ${avatarBg}`}>
+                          {icon}
+                        </div>
+                        <h3 className="font-bold text-gray-900">{title}</h3>
+                      </div>
+                      <div className="font-black text-xl text-gray-800">{report.score}</div>
+                    </div>
+                    
+                    {report.keywords && report.keywords.length > 0 && (
+                      <div className="flex flex-wrap gap-2 mt-3">
+                        {report.keywords.map((kw, i) => (
+                          <span key={i} className="text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded-md font-medium">
+                            {kw}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              
+              {audit.status === "completed" && reports?.length === 0 && (
+                <div className="text-center text-gray-500 text-sm">No reports generated.</div>
+              )}
+            </div>
           </div>
         </div>
       </main>
