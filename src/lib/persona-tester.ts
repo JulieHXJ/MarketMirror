@@ -392,14 +392,15 @@ IMPORTANT:
       if (msg.tool_calls && msg.tool_calls.length > 0) {
         for (const tc of msg.tool_calls) {
           if (tc.type !== "function") continue;
-          const name = tc.function.name;
-          const args = JSON.parse(tc.function.arguments || "{}");
+          const fn = (tc as { type: "function"; id: string; function: { name: string; arguments: string } });
+          const name = fn.function.name;
+          const args = JSON.parse(fn.function.arguments || "{}");
 
           log.debug(`${persona.name} tool: ${name}`, args);
 
           if (name === "finish_testing") {
             summaryResult = args;
-            messages.push({ role: "tool", tool_call_id: tc.id, content: "Testing complete." });
+            messages.push({ role: "tool", tool_call_id: fn.id, content: "Testing complete." });
             break;
           }
 
@@ -407,7 +408,7 @@ IMPORTANT:
             feedbackItems.push(args);
             actionLog.push({ action: `[${args.category}/${args.severity}]`, feedback: args.feedback });
             onEvent?.(`${persona.name}: "${args.feedback.substring(0, 80)}..."`);
-            messages.push({ role: "tool", tool_call_id: tc.id, content: "Feedback recorded. Continue testing." });
+            messages.push({ role: "tool", tool_call_id: fn.id, content: "Feedback recorded. Continue testing." });
             continue;
           }
 
@@ -445,30 +446,38 @@ IMPORTANT:
               case "fill_input": {
                 let filled = false;
                 const fType = args.fieldType as string | undefined;
-                const ph = args.placeholder as string;
-                // By fieldType (e.g. input[type="password"])
+                const ph = args.placeholder as string | undefined;
+                const val = args.value as string;
+                // 1. By fieldType (e.g. input[type="password"])
                 if (fType && !filled) try {
                   const byType = page.locator(`input[type="${fType}"]`).first();
-                  if (await byType.isVisible({ timeout: 1000 })) { await byType.fill(args.value); filled = true; }
+                  if (await byType.isVisible({ timeout: 1000 })) { await byType.fill(val); filled = true; }
                 } catch { /* next */ }
-                // By label
+                // 2. By label
                 if (ph && !filled) try {
                   const byLabel = page.getByLabel(ph, { exact: false }).first();
-                  if (await byLabel.isVisible({ timeout: 1000 })) { await byLabel.fill(args.value); filled = true; }
+                  if (await byLabel.isVisible({ timeout: 1000 })) { await byLabel.fill(val); filled = true; }
                 } catch { /* next */ }
-                // By placeholder
+                // 3. By placeholder
                 if (ph && !filled) try {
                   const byPh = page.getByPlaceholder(ph, { exact: false }).first();
-                  if (await byPh.isVisible({ timeout: 1000 })) { await byPh.fill(args.value); filled = true; }
+                  if (await byPh.isVisible({ timeout: 1000 })) { await byPh.fill(val); filled = true; }
                 } catch { /* next */ }
-                // By role
+                // 4. By role
                 if (ph && !filled) try {
                   const byRole = page.getByRole("textbox", { name: ph }).first();
-                  if (await byRole.isVisible({ timeout: 1000 })) { await byRole.fill(args.value); filled = true; }
+                  if (await byRole.isVisible({ timeout: 1000 })) { await byRole.fill(val); filled = true; }
+                } catch { /* next */ }
+                // 5. FALLBACK: guess by field type from context
+                if (!filled) try {
+                  const isPassword = fType === "password" || /passwor|kennwor/i.test(ph || "");
+                  const selector = isPassword ? 'input[type="password"]' : 'input[type="text"]';
+                  const fallback = page.locator(selector).first();
+                  if (await fallback.isVisible({ timeout: 1000 })) { await fallback.fill(val); filled = true; }
                 } catch { /* give up */ }
                 if (filled) {
                   screenshot = await captureScreenshot(page);
-                  resultText = `Filled "${ph || fType}" with "${args.value}". Screenshot attached.`;
+                  resultText = `Filled "${ph || fType || "input"}" with "${val}". Screenshot attached.`;
                 } else {
                   resultText = `Could not find input "${ph || fType}". This might be a bug.`;
                 }
@@ -506,9 +515,9 @@ IMPORTANT:
           actionLog.push({ action: `${name}: ${JSON.stringify(args)}`, feedback: resultText, screenshot });
 
           if (screenshot) {
-            messages.push(screenshotToolResponse(tc.id, resultText, screenshot));
+            messages.push(screenshotToolResponse(fn.id, resultText, screenshot));
           } else {
-            messages.push({ role: "tool", tool_call_id: tc.id, content: resultText });
+            messages.push({ role: "tool", tool_call_id: fn.id, content: resultText });
           }
         }
         if (summaryResult) break;

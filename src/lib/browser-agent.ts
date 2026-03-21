@@ -1,6 +1,5 @@
 import { chromium, Browser, Page } from "playwright";
 import OpenAI from "openai";
-import { GoogleGenerativeAI } from "@google/generative-ai";
 import { Persona, WebsiteAnalysis } from "./types";
 import { createLogger } from "./logger";
 import { getProvider } from "./llm";
@@ -19,20 +18,27 @@ function getOpenAI() {
   return _openai;
 }
 
-let _gemini: GoogleGenerativeAI | null = null;
-function getGemini() {
-  if (!_gemini) {
-    _gemini = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
+let _geminiClient: OpenAI | null = null;
+function getGeminiClient() {
+  if (!_geminiClient) {
+    // Use Gemini's OpenAI-compatible endpoint — handles thought_signatures automatically
+    _geminiClient = new OpenAI({
+      apiKey: process.env.GEMINI_API_KEY,
+      baseURL: "https://generativelanguage.googleapis.com/v1beta/openai/",
+    });
   }
-  return _gemini;
+  return _geminiClient;
 }
 
-const OPENAI_MODEL = "gpt-4.1-mini";
-
-function getGeminiModel(): string {
+function getLLMClient(): { client: OpenAI; model: string } {
   const provider = getProvider();
-  // Gemini 3 requires thought_signatures for tool-use — use 2.5 for stability
-  return provider === "gemini-pro" ? "gemini-2.5-pro-preview-05-06" : "gemini-2.5-flash";
+  if (provider === "gemini-pro") {
+    return { client: getGeminiClient(), model: "gemini-3.1-pro-preview" };
+  }
+  if (provider === "gemini") {
+    return { client: getGeminiClient(), model: "gemini-3-flash-preview" };
+  }
+  return { client: getOpenAI(), model: "gpt-4.1-mini" };
 }
 
 /**
@@ -45,140 +51,17 @@ async function agentLLMCall(
   toolChoice: "auto" | { type: "function"; function: { name: string } },
   maxTokens: number
 ) {
-  const provider = getProvider();
-  log.debug(`LLM call using ${provider}`);
-
-  if (provider === "gemini") {
-    try {
-      return await geminiAgentCall(messages, tools, toolChoice, maxTokens);
-    } catch (err) {
-      log.warn(`Gemini call failed, falling back to OpenAI: ${err instanceof Error ? err.message : err}`);
-    }
-  }
-
-  // OpenAI (default or fallback)
-  const response = await getOpenAI().chat.completions.create({
-    model: OPENAI_MODEL,
+  const { client, model } = getLLMClient();
+  log.debug(`LLM call using ${model}`);
+  return client.chat.completions.create({
+    model,
     messages,
     tools,
     tool_choice: toolChoice,
     max_tokens: maxTokens,
   });
-  return response;
 }
 
-async function geminiAgentCall(
-  messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[],
-  tools: OpenAI.Chat.Completions.ChatCompletionTool[],
-  toolChoice: "auto" | { type: "function"; function: { name: string } },
-  maxTokens: number
-): Promise<OpenAI.Chat.Completions.ChatCompletion> {
-  const gemini = getGemini();
-  const model = gemini.getGenerativeModel({
-    model: getGeminiModel(),
-    generationConfig: { maxOutputTokens: maxTokens, temperature: 0.7 },
-  });
-
-  // Convert system message
-  const systemMsg = messages.filter(m => m.role === "system").map(m => {
-    if (typeof m.content === "string") return m.content;
-    return "";
-  }).join("\n");
-
-  // Convert tools
-  const geminiTools = [{
-    functionDeclarations: tools.filter(t => t.type === "function").map(t => ({
-      name: t.function.name,
-      description: t.function.description,
-      parameters: t.function.parameters,
-    })),
-  }] as unknown as import("@google/generative-ai").Tool[];
-
-  const toolConfig = (typeof toolChoice === "object"
-    ? { functionCallingConfig: { mode: "ANY", allowedFunctionNames: [toolChoice.function.name] } }
-    : { functionCallingConfig: { mode: "AUTO" } }
-  ) as import("@google/generative-ai").ToolConfig;
-
-  // Convert message history (skip system)
-  const history: import("@google/generative-ai").Content[] = [];
-  for (const m of messages) {
-    if (m.role === "system") continue;
-    if (m.role === "user") {
-      const parts: import("@google/generative-ai").Part[] = [];
-      if (typeof m.content === "string") {
-        parts.push({ text: m.content });
-      } else if (Array.isArray(m.content)) {
-        for (const c of m.content as unknown as Record<string, unknown>[]) {
-          if (c.type === "text") parts.push({ text: c.text as string });
-          // Skip images for Gemini — text-only for simplicity
-        }
-      }
-      history.push({ role: "user", parts });
-    } else if (m.role === "assistant") {
-      const am = m as OpenAI.Chat.Completions.ChatCompletionAssistantMessageParam;
-      const parts: import("@google/generative-ai").Part[] = [];
-      if (am.content) parts.push({ text: typeof am.content === "string" ? am.content : "" });
-      if (am.tool_calls) {
-        for (const tc of am.tool_calls) {
-          if (tc.type === "function") {
-            parts.push({ functionCall: { name: tc.function.name, args: JSON.parse(tc.function.arguments || "{}") } });
-          }
-        }
-      }
-      if (parts.length > 0) history.push({ role: "model", parts });
-    } else if (m.role === "tool") {
-      const tm = m as OpenAI.Chat.Completions.ChatCompletionToolMessageParam;
-      const content = typeof tm.content === "string" ? tm.content : JSON.stringify(tm.content);
-      history.push({
-        role: "function" as unknown as "user",
-        parts: [{ functionResponse: { name: tm.tool_call_id || "tool", response: { result: content } } }],
-      });
-    }
-  }
-
-  const chat = model.startChat({
-    history: history.slice(0, -1),
-    systemInstruction: systemMsg ? { role: "user" as const, parts: [{ text: systemMsg }] } : undefined,
-    tools: geminiTools,
-    toolConfig,
-  });
-
-  const lastMsg = history[history.length - 1];
-  const result = await chat.sendMessage(lastMsg?.parts || [{ text: "" }]);
-  const resp = result.response;
-
-  // Convert Gemini response to OpenAI format
-  const functionCalls = resp.functionCalls();
-  const toolCalls: OpenAI.Chat.Completions.ChatCompletionMessageToolCall[] | undefined =
-    functionCalls?.map((fc, i) => ({
-      id: `gemini-${Date.now()}-${i}`,
-      type: "function" as const,
-      function: { name: fc.name, arguments: JSON.stringify(fc.args) },
-    }));
-
-  return {
-    id: `gemini-${Date.now()}`,
-    object: "chat.completion" as const,
-    created: Math.floor(Date.now() / 1000),
-    model: getGeminiModel(),
-    choices: [{
-      index: 0,
-      message: {
-        role: "assistant" as const,
-        content: resp.text() || null,
-        tool_calls: toolCalls?.length ? toolCalls : undefined,
-        refusal: null,
-      },
-      finish_reason: toolCalls?.length ? "tool_calls" as const : "stop" as const,
-      logprobs: null,
-    }],
-    usage: {
-      prompt_tokens: resp.usageMetadata?.promptTokenCount || 0,
-      completion_tokens: resp.usageMetadata?.candidatesTokenCount || 0,
-      total_tokens: resp.usageMetadata?.totalTokenCount || 0,
-    },
-  } as unknown as OpenAI.Chat.Completions.ChatCompletion;
-}
 const MAX_STEPS = 25;
 
 export interface AgentEvent {
@@ -608,6 +491,18 @@ async function executeTool(
               await byRole.fill(value);
               filled = true;
             }
+          } catch { /* try next */ }
+        }
+        // FALLBACK: guess by context — password-like values go to password field, else first text field
+        if (!filled) {
+          try {
+            const isPassword = fieldType === "password" || /passwor|kennwor/i.test(placeholder || "");
+            const selector = isPassword ? 'input[type="password"]' : 'input[type="text"]';
+            const fallback = page.locator(selector).first();
+            if (await fallback.isVisible({ timeout: 1000 })) {
+              await fallback.fill(value);
+              filled = true;
+            }
           } catch { /* give up */ }
         }
         if (!filled) {
@@ -680,7 +575,8 @@ export async function runBrowserAgent(
   const targetPath = parsedTarget.pathname.replace(/\/$/, "");
   const hasPathScope = targetPath.length > 0 && targetPath !== "/";
 
-  log.info(`Starting browser agent`, { targetUrl, allowedOrigin, maxSteps: MAX_STEPS, model: getProvider() === "gemini" ? getGeminiModel() : OPENAI_MODEL });
+  const { model: activeModel } = getLLMClient();
+  log.info(`Starting browser agent`, { targetUrl, allowedOrigin, maxSteps: MAX_STEPS, model: activeModel });
 
   try {
     emit({
@@ -804,8 +700,9 @@ STRATEGY:
             resultLength: result.text.length,
           });
 
-          // If the tool returned a screenshot, include it as vision input
-          if (result.screenshot) {
+          // If the tool returned a screenshot, include it as vision input (OpenAI only — Gemini doesn't support images in tool responses)
+          const isGemini = getProvider().startsWith("gemini");
+          if (result.screenshot && !isGemini) {
             messages.push(
               toolResponseWithScreenshot(toolCall.id, result.text, result.screenshot)
             );
@@ -908,25 +805,10 @@ Respond with ONLY valid JSON array:
   "selected": boolean (first 8 true, rest false)
 }]`;
 
-  const provider = getProvider();
+  const { client, model } = getLLMClient();
 
-  if (provider === "gemini") {
-    try {
-      const gemini = getGemini();
-      const model = gemini.getGenerativeModel({ model: getGeminiModel() });
-      const result = await model.generateContent({
-        contents: [{ role: "user", parts: [{ text: "You create realistic customer personas for product research. Respond only with valid JSON.\n\n" + prompt }] }],
-        generationConfig: { temperature: 0.7, maxOutputTokens: 4000 },
-      });
-      const geminiText = result.response.text() || "[]";
-      return JSON.parse(geminiText.replace(/```json\n?|```/g, "").trim());
-    } catch (err) {
-      log.warn(`Gemini persona gen failed, falling back to OpenAI: ${err instanceof Error ? err.message : err}`);
-    }
-  }
-
-  const response = await getOpenAI().chat.completions.create({
-    model: OPENAI_MODEL,
+  const response = await client.chat.completions.create({
+    model,
     messages: [
       {
         role: "system",
