@@ -121,14 +121,23 @@ function AuditView({ auditId }: { auditId: Id<"website_audits"> }) {
           )}
 
           <div className="bg-white rounded-lg shadow-sm border overflow-auto relative" style={{ minHeight: '600px' }}>
-            {!screenshotUrl && audit.status !== "queued" && audit.status !== "failed" && (
-              <div className="absolute inset-0 flex items-center justify-center flex-col text-gray-400">
-                <Loader2 className="w-8 h-8 animate-spin mb-2" />
-                <p>Capturing visual DOM tree...</p>
+            {!screenshotUrl && audit.status !== "failed" && (
+              <div className="absolute inset-0 z-10">
+                <iframe 
+                  src={audit.url.startsWith('http') ? audit.url : `https://${audit.url}`} 
+                  className="w-full h-full opacity-50 pointer-events-none"
+                  title="Website Preview"
+                  sandbox="allow-scripts allow-same-origin"
+                />
+                <div className="absolute inset-0 flex items-center justify-center flex-col text-gray-800 bg-white/40 backdrop-blur-sm">
+                  <Loader2 className="w-10 h-10 animate-spin mb-3 text-blue-600" />
+                  <p className="font-medium text-lg drop-shadow-sm">Capturing visual DOM tree...</p>
+                  <p className="text-sm mt-2 text-gray-600 font-medium">Please wait while the AI experts analyze the page</p>
+                </div>
               </div>
             )}
             
-            {audit.status === "analyzing" && (
+            {audit.status === "analyzing" && screenshotUrl && (
               <div className="absolute inset-0 flex items-center justify-center flex-col text-gray-400 z-20 bg-white/80">
                 <Loader2 className="w-8 h-8 animate-spin mb-2" />
                 <p>AI experts are analyzing...</p>
