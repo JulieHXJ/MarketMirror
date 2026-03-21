@@ -10,6 +10,8 @@ export const metadata: Metadata = {
   description: "AI-powered UX & Accessibility Audit platform for the German market.",
 };
 
+export const maxDuration = 60; // Set Vercel execution timeout to max for Hobby tier (60s)
+
 export default function RootLayout({
   children,
 }: Readonly<{

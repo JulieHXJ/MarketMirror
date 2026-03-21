@@ -8,8 +8,6 @@ export interface AuditResult {
   simplifiedHtml: string;
 }
 
-export const maxDuration = 60; // 60 seconds max timeout for Vercel Hobby tier
-
 export async function runVisualSensor(url: string): Promise<AuditResult> {
   let browser;
   try {
@@ -37,7 +35,6 @@ export async function runVisualSensor(url: string): Promise<AuditResult> {
       if (process.env.VERCEL) {
         options.executablePath = await chromiumEdge.executablePath();
         options.args = chromiumEdge.args;
-        options.headless = chromiumEdge.headless;
       }
     }
     browser = await chromium.launch(options);
@@ -77,9 +74,9 @@ export async function runVisualSensor(url: string): Promise<AuditResult> {
     // Extract simplified DOM tree
     // Only keeping interactive elements and headings for AI analysis
     console.log(`Extracting DOM tree...`);
-    let simplifiedHtml;
+    let simplifiedHtml: string;
     try {
-      simplifiedHtml = await page.evaluate(`
+      simplifiedHtml = (await page.evaluate(`
         (() => {
           const allowedTags = ['A', 'BUTTON', 'INPUT', 'FORM', 'SELECT', 'TEXTAREA', 'H1', 'H2', 'H3', 'P', 'IMG'];
           
@@ -125,7 +122,7 @@ export async function runVisualSensor(url: string): Promise<AuditResult> {
           const tree = buildSimplifiedTree(document.body);
           return JSON.stringify(tree, null, 2);
         })()
-      `);
+      `)) as string;
       console.log("DOM tree extracted successfully.");
     } catch (evalError) {
       console.error("Error during DOM evaluation:", evalError);
