@@ -71,9 +71,10 @@ export default function Dashboard() {
 }
 
 function AuditView({ auditId }: { auditId: Id<"website_audits"> }) {
-  const [activeTab, setActiveTab] = useState<"analysis" | "scoring" | "improvements">("analysis");
+  const [activeTab, setActiveTab] = useState<"overview" | "analysis" | "scoring" | "improvements">("overview");
   const [viewMode, setViewMode] = useState<"highlights" | "iframe">("highlights");
   const [hoveredFinding, setHoveredFinding] = useState<number | null>(null);
+  const [selectedPersona, setSelectedPersona] = useState<"All" | "Senior" | "A11y" | "Pro">("All");
   const audit = useQuery(api.audits.getAudit, { id: auditId });
   const reports = useQuery(api.audits.getPersonaReports, { auditId });
   const screenshotUrl = useQuery(
@@ -90,6 +91,10 @@ function AuditView({ auditId }: { auditId: Id<"website_audits"> }) {
   const allFindings = reports?.flatMap(r => 
     r.findings.map(f => ({ ...f, persona: r.persona_type }))
   ) || [];
+
+  const displayedFindings = selectedPersona === "All" 
+    ? allFindings 
+    : allFindings.filter(f => f.persona === selectedPersona);
 
   return (
     <div className="min-h-screen bg-gray-100 flex flex-col">
@@ -114,8 +119,14 @@ function AuditView({ auditId }: { auditId: Id<"website_audits"> }) {
         {/* Tabs Navigation */}
         <div className="bg-white border-b px-6 flex gap-6">
           <button 
-            className={`py-3 font-medium text-sm border-b-2 transition-colors ${activeTab === 'analysis' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-800'}`}
-            onClick={() => setActiveTab('analysis')}
+            className={`py-3 font-medium text-sm border-b-2 transition-colors ${activeTab === 'overview' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-800'}`}
+            onClick={() => setActiveTab('overview')}
+          >
+            Overview
+          </button>
+          <button 
+            className={`py-3 font-medium text-sm border-b-2 transition-colors ${activeTab === 'analysis' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-800'} ${audit.status !== 'completed' ? 'opacity-50 cursor-not-allowed' : ''}`}
+            onClick={() => audit.status === 'completed' && setActiveTab('analysis')}
           >
             Analysis (Live View)
           </button>
@@ -133,9 +144,69 @@ function AuditView({ auditId }: { auditId: Id<"website_audits"> }) {
           </button>
         </div>
 
-        <div className="flex-1 flex overflow-hidden">
+        <div className="flex-1 flex overflow-hidden relative">
           {/* Main Content Area */}
-          <div className="flex-1 p-6 overflow-auto border-r bg-gray-50">
+          <div className="flex-1 p-6 overflow-auto bg-gray-50">
+            {activeTab === 'overview' && (
+              <div className="space-y-6 max-w-5xl mx-auto">
+                <h2 className="text-2xl font-bold text-gray-900 mb-6">Audit Overview</h2>
+                
+                {audit.status === "analyzing" && (
+                  <div className="bg-white rounded-xl shadow-sm border p-12 flex flex-col items-center justify-center text-center">
+                    <Loader2 className="w-12 h-12 animate-spin text-blue-600 mb-4" />
+                    <h3 className="text-xl font-bold text-gray-900 mb-2">AI Experts are analyzing the page</h3>
+                    <p className="text-gray-500">Generating comprehensive reports across 3 different personas. This may take a moment...</p>
+                  </div>
+                )}
+
+                {audit.status === "completed" && (
+                  <>
+                    {/* Overall Score */}
+                    <div className="bg-white rounded-xl shadow-sm border p-8 flex flex-col items-center justify-center">
+                      <div className="text-sm font-medium text-gray-500 mb-2 uppercase tracking-wider">Overall Score</div>
+                      <div className={`text-6xl font-black ${audit.overall_score !== undefined && audit.overall_score >= 80 ? 'text-green-600' : audit.overall_score !== undefined && audit.overall_score >= 60 ? 'text-orange-500' : 'text-red-600'}`}>
+                        {audit.overall_score !== undefined ? audit.overall_score : '-'}
+                        <span className="text-3xl text-gray-400">/100</span>
+                      </div>
+                    </div>
+
+                    {/* Score Distribution */}
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                      {reports?.map(report => {
+                        let title, color, bg, icon;
+                        if (report.persona_type === "Senior") { title = "Oma Schmidt"; color = "text-orange-600"; bg = "bg-orange-600"; icon = <UserCircle className="w-6 h-6"/>; }
+                        else if (report.persona_type === "A11y") { title = "Legal Advisor"; color = "text-purple-600"; bg = "bg-purple-600"; icon = <Scale className="w-6 h-6"/>; }
+                        else { title = "Digital Native"; color = "text-blue-600"; bg = "bg-blue-600"; icon = <MonitorSmartphone className="w-6 h-6"/>; }
+
+                        return (
+                          <div key={report._id} className="bg-white rounded-xl shadow-sm border p-6 flex flex-col">
+                            <div className={`flex items-center gap-3 mb-4 ${color}`}>
+                              {icon}
+                              <h3 className="font-bold text-gray-900 text-lg">{title}</h3>
+                            </div>
+                            <div className="flex items-end gap-2 mb-3">
+                              <span className="text-4xl font-black text-gray-800">{report.score}</span>
+                              <span className="text-gray-500 mb-1 font-medium">/ 100</span>
+                            </div>
+                            <div className="w-full bg-gray-100 rounded-full h-3 mb-6">
+                              <div className={`h-3 rounded-full ${bg}`} style={{ width: `${report.score}%` }}></div>
+                            </div>
+                            <div className="mt-auto flex flex-wrap gap-2">
+                              {report.keywords?.map((kw, i) => (
+                                <span key={i} className="text-xs bg-gray-50 text-gray-700 px-2.5 py-1.5 rounded-md border font-medium">
+                                  {kw}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+
             {activeTab === 'analysis' && (
               <>
               {/* Header with toggle for View Mode when completed */}
@@ -223,7 +294,7 @@ function AuditView({ auditId }: { auditId: Id<"website_audits"> }) {
                 
                 {/* Overlay SVGs for flaws */}
                 <div className="absolute top-0 left-0 w-full h-full pointer-events-none">
-                  {allFindings.map((finding, idx) => {
+                  {displayedFindings.map((finding, idx) => {
                     // Default to some size if width/height is missing, though they shouldn't be
                     const width = finding.coordinates.width || 40;
                     const height = finding.coordinates.height || 40;
@@ -297,6 +368,59 @@ function AuditView({ auditId }: { auditId: Id<"website_audits"> }) {
                 </div>
               </div>
             )}
+            
+            {/* Floating Role Filters */}
+            {audit.status === "completed" && activeTab === 'analysis' && viewMode === "highlights" && (
+              <div className="fixed right-6 top-1/2 transform -translate-y-1/2 flex flex-col gap-4 z-50">
+                <button 
+                  onClick={() => setSelectedPersona("All")}
+                  className={`w-14 h-14 rounded-full flex flex-col items-center justify-center shadow-lg transition-transform hover:scale-105 border-2 ${selectedPersona === "All" ? "border-gray-800 bg-gray-800 text-white" : "border-gray-200 bg-white text-gray-600"}`}
+                  title="All Personas"
+                >
+                  <span className="text-xs font-bold">ALL</span>
+                </button>
+                {reports?.map(report => {
+                  let colorHex, bgColorHex, icon, title;
+                  if (report.persona_type === "Senior") { colorHex = "#f97316"; bgColorHex = "bg-orange-50"; icon = <UserCircle className="w-6 h-6"/>; title = "Oma Schmidt"; }
+                  else if (report.persona_type === "A11y") { colorHex = "#a855f7"; bgColorHex = "bg-purple-50"; icon = <Scale className="w-6 h-6"/>; title = "Legal Advisor"; }
+                  else { colorHex = "#3b82f6"; bgColorHex = "bg-blue-50"; icon = <MonitorSmartphone className="w-6 h-6"/>; title = "Digital Native"; }
+
+                  const isSelected = selectedPersona === report.persona_type;
+
+                  return (
+                    <div key={report._id} className="relative group">
+                      <button 
+                        onClick={() => setSelectedPersona(report.persona_type)}
+                        className={`w-14 h-14 rounded-full flex items-center justify-center shadow-lg transition-transform hover:scale-105 border-2 relative`}
+                        style={{ 
+                          borderColor: isSelected ? colorHex : '#e5e7eb',
+                          backgroundColor: isSelected ? colorHex : 'white',
+                          color: isSelected ? 'white' : colorHex
+                        }}
+                      >
+                        {icon}
+                        {/* Score badge */}
+                        <div className="absolute -top-2 -right-2 bg-white text-gray-900 font-bold text-[10px] w-6 h-6 rounded-full flex items-center justify-center border shadow-sm">
+                          {report.score}
+                        </div>
+                      </button>
+                      
+                      {/* Expandable info on hover */}
+                      <div className="absolute right-full top-1/2 transform -translate-y-1/2 mr-4 w-64 bg-white p-4 rounded-xl shadow-xl border opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity duration-200">
+                        <h4 className="font-bold text-gray-900 mb-1" style={{ color: colorHex }}>{title}</h4>
+                        <div className="text-sm font-bold mb-2 text-gray-800">Score: {report.score}/100</div>
+                        <div className="flex flex-wrap gap-1">
+                          {report.keywords?.map((kw, i) => (
+                            <span key={i} className="text-[10px] bg-gray-100 px-1.5 py-0.5 rounded text-gray-600 border border-gray-200">{kw}</span>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            
             </div>
           </div>
               </>
@@ -386,71 +510,6 @@ function AuditView({ auditId }: { auditId: Id<"website_audits"> }) {
                 </div>
               </div>
             )}
-          </div>
-
-          {/* Right Panel: Simplified Persona Feeds */}
-          <div className="w-[350px] bg-white flex flex-col overflow-hidden">
-            <div className="p-4 border-b">
-              <h2 className="text-lg font-semibold text-gray-900">Panel of Experts</h2>
-              <p className="text-xs text-gray-500 mt-1">High-level overview</p>
-            </div>
-            
-            <div className="flex-1 overflow-auto p-4 space-y-4 bg-gray-50">
-              {audit.status === "analyzing" && reports?.length === 0 && (
-                <div className="flex items-center text-gray-500 justify-center h-20">
-                  <Loader2 className="w-5 h-5 animate-spin mr-2" />
-                  Analyzing...
-                </div>
-              )}
-
-              {reports?.map((report) => {
-                let icon;
-                let title;
-                let avatarBg;
-                
-                if (report.persona_type === "Senior") {
-                  icon = <UserCircle className="w-6 h-6 text-orange-600" />;
-                  title = "Oma Schmidt";
-                  avatarBg = "bg-orange-100";
-                } else if (report.persona_type === "A11y") {
-                  icon = <Scale className="w-6 h-6 text-purple-600" />;
-                  title = "Legal Advisor";
-                  avatarBg = "bg-purple-100";
-                } else {
-                  icon = <MonitorSmartphone className="w-6 h-6 text-blue-600" />;
-                  title = "Digital Native";
-                  avatarBg = "bg-blue-100";
-                }
-
-                return (
-                  <div key={report._id} className="bg-white rounded-lg p-4 shadow-sm border border-gray-100 hover:shadow-md transition-shadow">
-                    <div className="flex items-center justify-between mb-3">
-                      <div className="flex items-center gap-3">
-                        <div className={`p-2 rounded-full ${avatarBg}`}>
-                          {icon}
-                        </div>
-                        <h3 className="font-bold text-gray-900">{title}</h3>
-                      </div>
-                      <div className="font-black text-xl text-gray-800">{report.score}</div>
-                    </div>
-                    
-                    {report.keywords && report.keywords.length > 0 && (
-                      <div className="flex flex-wrap gap-2 mt-3">
-                        {report.keywords.map((kw, i) => (
-                          <span key={i} className="text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded-md font-medium">
-                            {kw}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-              
-              {audit.status === "completed" && reports?.length === 0 && (
-                <div className="text-center text-gray-500 text-sm">No reports generated.</div>
-              )}
-            </div>
           </div>
         </div>
       </main>
