@@ -150,7 +150,7 @@ function AuditView({ auditId }: { auditId: Id<"website_audits"> }) {
                 )}
 
           <div className="bg-white rounded-lg shadow-sm border relative overflow-hidden" style={{ minHeight: '600px' }}>
-            <div className="w-full h-full overflow-auto">
+            <div className="w-full h-full overflow-auto relative">
               {!screenshotUrl && audit.status !== "failed" && audit.status !== "completed" && (
                 <div className="absolute inset-0 z-10">
                   <iframe 
