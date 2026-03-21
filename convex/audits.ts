@@ -22,13 +22,13 @@ export const updateAuditStatus = mutation({
     simplifiedHtml: v.optional(v.string()), // Ensure this is definitely updated
   },
   handler: async (ctx, args) => {
-    await ctx.db.patch(args.id, {
-      status: args.status,
-      error_message: args.error_message,
-      overall_score: args.overall_score,
-      screenshotId: args.screenshotId,
-      simplifiedHtml: args.simplifiedHtml,
-    });
+    const updateData: any = { status: args.status };
+    if (args.error_message !== undefined) updateData.error_message = args.error_message;
+    if (args.overall_score !== undefined) updateData.overall_score = args.overall_score;
+    if (args.screenshotId !== undefined) updateData.screenshotId = args.screenshotId;
+    if (args.simplifiedHtml !== undefined) updateData.simplifiedHtml = args.simplifiedHtml;
+
+    await ctx.db.patch(args.id, updateData);
   },
 });
 
