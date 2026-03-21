@@ -1,2 +1,2 @@
-# ProductEvaluator
-AI project developed during Cursor hackathon.
+# PersonaLens
+AI role-based website intelligence platform
