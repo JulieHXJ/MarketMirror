@@ -79,6 +79,8 @@ function AuditView({ auditId }: { auditId: Id<"website_audits"> }) {
     api.files.getFileUrl, 
     audit?.screenshotId ? { storageId: audit.screenshotId } : "skip"
   );
+  
+  console.log("Screenshot URL from Convex:", screenshotUrl);
 
   if (!audit) {
     return <div className="min-h-screen flex items-center justify-center"><Loader2 className="w-8 h-8 animate-spin" /></div>;
@@ -187,15 +189,13 @@ function AuditView({ auditId }: { auditId: Id<"website_audits"> }) {
                   )}
                   
             {screenshotUrl && audit.status === "completed" && (
-              <div className="relative block mx-auto my-4 w-[1280px]">
+              <div className="relative block mx-auto my-4" style={{ width: '1280px', minHeight: '800px' }}>
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img 
                   src={screenshotUrl} 
                   alt="Website screenshot" 
-                  className="w-full block shadow-2xl rounded-md border border-gray-200"
-                  style={{ minHeight: '800px', backgroundColor: '#f8f9fa' }} 
-                  onLoad={(e) => console.log('Image loaded', e.currentTarget.naturalWidth)}
-                  onError={(e) => console.error('Image failed to load', e.currentTarget.src)}
+                  className="w-full h-auto block shadow-2xl rounded-md border border-gray-200"
+                  style={{ backgroundColor: '#f8f9fa' }} 
                 />
                 
                 {/* Overlay SVGs for flaws */}
