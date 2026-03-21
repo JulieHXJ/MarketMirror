@@ -72,6 +72,7 @@ export default function Dashboard() {
 
 function AuditView({ auditId }: { auditId: Id<"website_audits"> }) {
   const [activeTab, setActiveTab] = useState<"analysis" | "scoring" | "improvements">("analysis");
+  const [viewMode, setViewMode] = useState<"highlights" | "iframe">("highlights");
   const [hoveredFinding, setHoveredFinding] = useState<number | null>(null);
   const audit = useQuery(api.audits.getAudit, { id: auditId });
   const reports = useQuery(api.audits.getPersonaReports, { auditId });
@@ -137,9 +138,28 @@ function AuditView({ auditId }: { auditId: Id<"website_audits"> }) {
           <div className="flex-1 p-6 overflow-auto border-r bg-gray-50">
             {activeTab === 'analysis' && (
               <>
-                <h2 className="text-lg font-semibold mb-4">Live View (Visual Sensor)</h2>
-                
-                {audit.status === "failed" && (
+              {/* Header with toggle for View Mode when completed */}
+              <div className="flex justify-between items-center mb-4">
+                <h2 className="text-lg font-semibold">Live View (Visual Sensor)</h2>
+                {audit.status === "completed" && (
+                  <div className="flex items-center gap-2 bg-gray-100 p-1 rounded-lg">
+                    <button 
+                      onClick={() => setViewMode("highlights")}
+                      className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${viewMode === "highlights" ? "bg-white shadow-sm text-blue-600" : "text-gray-600 hover:text-gray-900"}`}
+                    >
+                      AI Highlights
+                    </button>
+                    <button 
+                      onClick={() => setViewMode("iframe")}
+                      className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${viewMode === "iframe" ? "bg-white shadow-sm text-blue-600" : "text-gray-600 hover:text-gray-900"}`}
+                    >
+                      Live Website
+                    </button>
+                  </div>
+                )}
+              </div>
+              
+              {audit.status === "failed" && (
                   <div className="bg-red-50 text-red-600 p-4 rounded-md mb-4 border border-red-200">
                     <p className="font-semibold">Audit failed</p>
                     <p className="text-sm mt-1">There was an error while trying to run the audit.</p>
@@ -150,32 +170,34 @@ function AuditView({ auditId }: { auditId: Id<"website_audits"> }) {
                 )}
 
           <div className="bg-white rounded-lg shadow-sm border relative overflow-hidden flex flex-col" style={{ minHeight: '800px' }}>
-            <div className="w-full flex-1 overflow-auto relative">
-              {!screenshotUrl && audit.status !== "failed" && audit.status !== "completed" && (
-                  <div className="absolute inset-0 z-10 bg-gray-50/80 pointer-events-none">
+            <div className="w-full flex-1 overflow-auto relative bg-gray-50">
+              {(!screenshotUrl || viewMode === "iframe") && audit.status !== "failed" && (
+                  <div className="absolute inset-0 z-10 bg-white pointer-events-auto">
                   <iframe 
                     src={audit.url.startsWith('http') ? audit.url : `https://${audit.url}`} 
-                    className="w-full h-full opacity-50 pointer-events-none"
+                    className="w-full h-full border-0"
                     title="Website Preview"
                     sandbox="allow-scripts allow-same-origin"
                   />
-                  <div className="absolute inset-0 flex items-center justify-center flex-col text-gray-800 bg-white/40 backdrop-blur-sm">
-                    <Loader2 className="w-10 h-10 animate-spin mb-3 text-blue-600" />
-                    <p className="font-medium text-lg drop-shadow-sm">Capturing visual DOM tree...</p>
-                    <p className="text-sm mt-2 text-gray-600 font-medium">Please wait while the AI experts analyze the page</p>
-                  </div>
-                </div>
-              )}
-              
-              {audit.status === "analyzing" && screenshotUrl && (
-                <div className="absolute inset-0 flex items-center justify-center flex-col text-gray-800 z-20 bg-white/60 backdrop-blur-md">
-                  <Loader2 className="w-10 h-10 animate-spin mb-3 text-blue-600" />
-                  <p className="font-medium text-lg drop-shadow-sm">AI experts are analyzing...</p>
-                  <p className="text-sm mt-2 text-gray-700 font-medium">Reading the extracted DOM and generating reports</p>
+                  
+                  {/* Loading Overlays - Only show when NOT completed */}
+                  {audit.status !== "completed" && (
+                    <div className="absolute inset-0 flex items-center justify-center flex-col text-gray-800 bg-white/60 backdrop-blur-sm pointer-events-none">
+                      <Loader2 className="w-10 h-10 animate-spin mb-3 text-blue-600" />
+                      <p className="font-medium text-lg drop-shadow-sm">
+                        {audit.status === "analyzing" ? "AI experts are analyzing..." : "Capturing visual DOM tree..."}
+                      </p>
+                      <p className="text-sm mt-2 text-gray-700 font-medium">
+                        {audit.status === "analyzing" 
+                          ? "Reading the extracted DOM and generating reports" 
+                          : "Please wait while the AI experts analyze the page"}
+                      </p>
+                    </div>
+                  )}
                 </div>
               )}
                   
-                  {audit.simplifiedHtml && audit.status === "completed" && (
+                  {audit.simplifiedHtml && audit.status === "completed" && viewMode === "highlights" && (
                       <div className="absolute top-4 left-4 right-4 bg-white/95 backdrop-blur p-4 rounded-md shadow-lg border border-gray-200 text-sm max-h-64 overflow-auto z-10 hidden">
                           <div className="flex justify-between items-center mb-2 sticky top-0 bg-white/95 pb-2 border-b">
                               <h3 className="font-bold text-gray-800 flex items-center gap-2">
@@ -189,8 +211,8 @@ function AuditView({ auditId }: { auditId: Id<"website_audits"> }) {
                       </div>
                   )}
                   
-            {screenshotUrl && audit.status === "completed" && (
-              <div className="relative mx-auto w-full min-h-[800px] max-w-[1280px]">
+            {screenshotUrl && audit.status === "completed" && viewMode === "highlights" && (
+              <div className="relative mx-auto w-[1280px] min-h-[800px]">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img 
                   src={screenshotUrl} 
