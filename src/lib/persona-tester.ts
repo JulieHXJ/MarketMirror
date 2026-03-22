@@ -3,6 +3,12 @@ import OpenAI from "openai";
 import * as crypto from "crypto";
 import { Persona, WebsiteAnalysis } from "./types";
 import { createLogger } from "./logger";
+import {
+  isLikelySearchOrSubmitAction,
+  spaInteractionWait,
+  tryEnterFallbackForSlowSpa,
+} from "./spa-wait";
+import { analyzeSessionFindings, type SessionFeedbackItem } from "./analyzer";
 
 const log = createLogger("agent:persona-tester");
 
@@ -62,12 +68,12 @@ const MAX_STEPS = 25;
 
 export interface DetailedFinding {
   category: string;
-  severity: "critical" | "major" | "minor" | "positive";
+  severity: "critical" | "major" | "medium" | "minor" | "positive";
   title: string;
   description: string;
   pageUrl?: string;
   evidence?: string;
-  rootCauseType?: "system_bug" | "ux_friction" | "semantic_confusion";
+  rootCauseType?: "system_bug" | "ux_friction" | "semantic_confusion" | "self_correction";
 }
 
 export interface BetaTestResult {
@@ -186,8 +192,9 @@ const TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
           },
           rootCauseType: {
             type: "string",
-            enum: ["system_bug", "ux_friction", "semantic_confusion"],
-            description: "Root cause: system_bug = real functional failure; ux_friction = feature works but hard to find/use; semantic_confusion = you clicked the wrong element or misunderstood the UI (your mistake)",
+            enum: ["system_bug", "ux_friction", "semantic_confusion", "self_correction"],
+            description:
+              "Root cause: system_bug = real functional failure; ux_friction = feature works but hard to find/use; semantic_confusion = you misunderstood the UI; self_correction = you hit friction but completed the task another way (the report may merge this with an earlier failure).",
           },
         },
         required: ["feedback", "category", "severity", "rootCauseType"],
@@ -637,7 +644,8 @@ export async function runPersonaTest(
   const targetUrl = analysis.url;
   const allowedOrigin = new URL(targetUrl).origin;
   const actionLog: BetaTestResult["actionLog"] = [];
-  const feedbackItems: { feedback: string; category: string; severity: string; pageUrl: string; rootCauseType: string }[] = [];
+  const feedbackItems: SessionFeedbackItem[] = [];
+  let feedbackSeq = 0;
   const vp = VIEWPORTS[device];
 
   log.info(`Starting persona test: ${persona.name} (${device})`, { personaId: persona.id, url: targetUrl, device });
@@ -740,6 +748,11 @@ PLATFORM NOISE (YouTube, Google, etc.) — Not product bugs:
 - Messages like "YouTube-Verlauf ist deaktiviert" / "Watch history is off" / "Personalized ads" are normal platform policies, NOT defects in the site you are reviewing. Ignore them for buySignal and continue using search, sidebar, or navigation.
 - After dismissing consent, the page may briefly look dark or empty — wait for content or scroll before concluding "blank screen". Do not attribute platform cookie flows to the product under test.
 
+ASYNC LOADING & SEARCH — Do not rush to file bugs:
+- SPAs (React, YouTube, etc.) often update the URL or content after a short delay. If the tool response says navigation occurred after "async settle" or mentions Enter fallback, do NOT retroactively report the earlier moment as a "broken" experience.
+- If you click Search or a similar button and the page does not visibly change immediately, wait — the tool may apply extra waits. If you still see no change, try pressing Enter on the focused search field before reporting a bug.
+- Watch for URL changes, progress bars, or skeleton loaders; "slow" is UX friction, not necessarily a critical bug unless the feature never completes after reasonable waiting.
+
 SELF-CORRECTION PROTOCOL — Before reporting any bug:
 1. If a click "did nothing", STOP. Ask yourself: "Did I click a heading, label, or description instead of the actual button/link?" If YES, find the real CTA nearby and try THAT first.
 2. If click_element tells you "the page did NOT change", that almost always means you clicked decorative text. Retry with the actual button text before reporting anything.
@@ -834,6 +847,7 @@ NAVIGATION RULES:
               severity,
               pageUrl: currentUrl,
               rootCauseType: rootCause,
+              feedbackIndex: feedbackSeq++,
             });
             actionLog.push({ action: `[${category}/${severity}/${rootCause}] on ${currentUrl}`, feedback: args.feedback as string });
             const causeLabel = rootCause === "semantic_confusion" ? "🔍" : rootCause === "ux_friction" ? "⚡" : "🐛";
@@ -904,21 +918,31 @@ NAVIGATION RULES:
                       }
                     }
                   }
-                  await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
-                  await page.waitForTimeout(800);
+                  await spaInteractionWait(page);
                   await dismissConsentBanners(page);
                   if (/youtube\.com/i.test(page.url())) {
                     await tryScriptConsentClick(page);
                     await recoverAfterConsentDeadlock(page);
                   }
+                  if (page.url() === urlBeforeClick) {
+                    await spaInteractionWait(page);
+                  }
+                  if (page.url() === urlBeforeClick && isLikelySearchOrSubmitAction(clickText)) {
+                    const nav = await tryEnterFallbackForSlowSpa(page, urlBeforeClick);
+                    if (nav) {
+                      onEvent?.(`↳ ${persona.name}: Enter key triggered delayed navigation after "${clickText}"`);
+                    }
+                  }
                   screenshot = await captureScreenshot(page, dedup) || undefined;
                   const samePage = page.url() === urlBeforeClick;
                   resultText = `Clicked "${clickText}". Now on: ${page.url()}.`;
+                  if (!samePage) {
+                    resultText += " Navigation occurred after async settle — if you previously thought nothing happened, ignore that; do not report slow SPA loading as a critical bug.";
+                  }
                   if (samePage && clicked) {
                     const near2 = await clickNearbyInteractive(page, clickText);
                     if (near2) {
-                      await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
-                      await page.waitForTimeout(600);
+                      await spaInteractionWait(page);
                       await dismissConsentBanners(page);
                       screenshot = await captureScreenshot(page, dedup) || undefined;
                       resultText = `Clicked "${clickText}" (used nearby-CTA fallback). Now on: ${page.url()}.`;
@@ -933,8 +957,7 @@ NAVIGATION RULES:
                 } catch {
                   const near3 = await clickNearbyInteractive(page, clickText);
                   if (near3) {
-                    await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
-                    await page.waitForTimeout(800);
+                    await spaInteractionWait(page);
                     await dismissConsentBanners(page);
                     screenshot = await captureScreenshot(page, dedup) || undefined;
                     resultText = `Clicked "${clickText}" via nearby-CTA fallback. Now on: ${page.url()}.${screenshot ? " Screenshot attached." : ""}`;
@@ -979,6 +1002,7 @@ NAVIGATION RULES:
                   if (await fallback.isVisible({ timeout: 1000 })) { await fallback.fill(val); filled = true; }
                 } catch { /* give up */ }
                 if (filled) {
+                  await spaInteractionWait(page);
                   screenshot = await captureScreenshot(page, dedup) || undefined;
                   resultText = `Filled "${ph || fType || "input"}" with "${val}". Screenshot attached.`;
                 } else {
@@ -989,7 +1013,7 @@ NAVIGATION RULES:
               case "scroll_down": {
                 onEvent?.(`→ ${persona.name} scrolling down`);
                 await page.evaluate(() => window.scrollBy(0, 800));
-                await page.waitForTimeout(500);
+                await spaInteractionWait(page);
                 screenshot = await captureScreenshot(page, dedup) || undefined;
                 resultText = `Scrolled down.${screenshot ? " Screenshot attached." : " (View unchanged)"}`;
                 break;
@@ -1045,18 +1069,15 @@ NAVIGATION RULES:
 
     const s = summaryResult || {};
 
-    // Build detailed findings from feedback items
-    const detailedFindings = feedbackItems
-      .filter((f) => f.severity !== "positive")
-      .map((f) => ({
-        category: f.category,
-        severity: f.severity as "critical" | "major" | "minor",
-        title: f.feedback.length > 80 ? f.feedback.substring(0, 77) + "..." : f.feedback,
-        description: f.feedback,
-        pageUrl: f.pageUrl,
-        evidence: f.feedback,
-        rootCauseType: (f.rootCauseType || "system_bug") as "system_bug" | "ux_friction" | "semantic_confusion",
-      }));
+    const detailedFindings: DetailedFinding[] = analyzeSessionFindings(feedbackItems).map((f) => ({
+      category: f.category,
+      severity: f.severity,
+      title: f.title,
+      description: f.description,
+      pageUrl: f.pageUrl,
+      evidence: f.evidence,
+      rootCauseType: f.rootCauseType,
+    }));
 
     const result: BetaTestResult = {
       personaId: persona.id,

@@ -4,6 +4,11 @@ import * as crypto from "crypto";
 import { Persona, WebsiteAnalysis } from "./types";
 import { createLogger } from "./logger";
 import { getProvider } from "./llm";
+import {
+  isLikelySearchOrSubmitAction,
+  spaInteractionWait,
+  tryEnterFallbackForSlowSpa,
+} from "./spa-wait";
 
 const log = createLogger("agent:browser");
 
@@ -640,15 +645,22 @@ async function executeTool(
         if (!clicked) {
           await page.getByText(text, { exact: false }).first().click();
         }
-        await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
-        await page.waitForTimeout(800);
+        await spaInteractionWait(page);
+        if (page.url() === urlBefore) {
+          await spaInteractionWait(page);
+        }
+        if (page.url() === urlBefore && isLikelySearchOrSubmitAction(text)) {
+          await tryEnterFallbackForSlowSpa(page, urlBefore);
+        }
         const newUrl = page.url();
         const title = await page.title();
         const samePage = newUrl === urlBefore;
         const screenshot = await captureScreenshot(page, emit, `After clicking "${text}"`, dedup);
         let resultMsg = `Clicked "${text}". Now on: ${newUrl} (title: "${title}").`;
         if (samePage) {
-          resultMsg += " NOTE: The page did NOT change — you may have clicked a non-interactive element (like a heading or label). Look for the actual button or link nearby (e.g. 'Download now', 'Learn more', 'Read more') and click THAT instead.";
+          resultMsg += " NOTE: The page did NOT change after SPA settle waits — you may have clicked a non-interactive element (like a heading or label). Look for the actual button or link nearby (e.g. 'Download now', 'Learn more', 'Read more') and click THAT instead.";
+        } else if (urlBefore !== newUrl) {
+          resultMsg += " (Navigation detected after async settle — do not report a bug for slow loading.)";
         }
         if (screenshot) resultMsg += " A screenshot is attached.";
         return { text: resultMsg, screenshot: screenshot || undefined };

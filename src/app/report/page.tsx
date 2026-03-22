@@ -29,12 +29,14 @@ interface ExtractedData {
 
 interface Finding {
   category: string;
-  severity: "critical" | "major" | "minor" | "positive";
+  severity: "critical" | "major" | "medium" | "minor" | "positive";
   title: string;
   description: string;
   pageUrl?: string;
   evidence?: string;
-  rootCauseType?: "system_bug" | "ux_friction" | "semantic_confusion";
+  rootCauseType?: "system_bug" | "ux_friction" | "semantic_confusion" | "self_correction";
+  /** Set when final buy signal contradicts an earlier harsh finding */
+  convergenceNote?: string;
 }
 
 interface StoredResult {
@@ -322,12 +324,42 @@ function ReportContent() {
     return { ...f, rootCauseType: rootCause as Finding["rootCauseType"], severity };
   });
 
-  const criticalFindings = allFindings.filter(
-    (f) => (f.severity === "critical" || f.severity === "major") && f.rootCauseType !== "semantic_confusion"
+  // --- Session convergence: high buy signal + "slow / nothing happened" → downgrade ---
+  const transientIssueRx =
+    /slow|delay|didn'?t (load|change|update)|not immediat|spinner|loading|stuck|wait|nothing happened|no response|frozen|async|did nothing|does nothing|blank for|for a moment/i;
+
+  const allFindingsConverged: (Finding & { persona: string })[] = allFindings.map((f) => {
+    const personaResult = completed.find((r) => r.personaName === f.persona);
+    const buy = personaResult?.extractedData?.buySignal ?? 0;
+    if (buy < 0.8) return f;
+
+    if (
+      (f.severity === "critical" || f.severity === "major") &&
+      transientIssueRx.test(`${f.title} ${f.description}`)
+    ) {
+      return {
+        ...f,
+        severity: "minor" as const,
+        rootCauseType: (f.rootCauseType === "system_bug" ? "ux_friction" : f.rootCauseType) as Finding["rootCauseType"],
+        convergenceNote:
+          "Final session buy signal is high — this reads as temporary confusion or slow SPA behavior, not a broken product.",
+      };
+    }
+    return f;
+  });
+
+  const criticalFindings = allFindingsConverged.filter(
+    (f) =>
+      (f.severity === "critical" || f.severity === "major") &&
+      f.rootCauseType !== "semantic_confusion" &&
+      f.rootCauseType !== "self_correction"
   );
-  const semanticFindings = allFindings.filter((f) => f.rootCauseType === "semantic_confusion");
-  const uxFrictionFindings = allFindings.filter(
+  const semanticFindings = allFindingsConverged.filter((f) => f.rootCauseType === "semantic_confusion");
+  const uxFrictionFindings = allFindingsConverged.filter(
     (f) => f.rootCauseType === "ux_friction" && f.severity !== "positive"
+  );
+  const selfCorrectionFindings = allFindingsConverged.filter(
+    (f) => f.rootCauseType === "self_correction"
   );
 
   const signalLabel =
@@ -442,9 +474,19 @@ function ReportContent() {
               <h2 className="text-4xl lg:text-5xl font-extrabold tracking-tighter text-on-surface mb-2">
                 Morning Report
               </h2>
-              <p className="text-sm text-on-surface-variant mb-4">
+              <p
+                className={`text-sm text-on-surface-variant ${
+                  selfCorrectionFindings.length > 0 ? "mb-2" : "mb-4"
+                }`}
+              >
                 {analysis.productName} — {analysis.industry}
               </p>
+              {selfCorrectionFindings.length > 0 && (
+                <p className="text-xs text-on-surface-variant/90 leading-relaxed mb-4 max-w-2xl">
+                  Session analysis merged {selfCorrectionFindings.length} failure-and-recovery sequence
+                  {selfCorrectionFindings.length === 1 ? "" : "s"} into interaction-friction insights (severity capped where users reached their goal via an alternate path).
+                </p>
+              )}
               <div className="flex gap-4">
                 <div className="px-3 py-1 bg-surface-container-high rounded text-[10px] font-mono text-on-surface-variant border border-outline-variant/20 uppercase">
                   {completed.length}/{results.length} Interviews
@@ -534,12 +576,20 @@ function ReportContent() {
                       <span className="text-[10px] font-mono text-on-surface-variant/60 bg-surface-container px-2 py-0.5 rounded">
                         {f.category}
                       </span>
-                      <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold uppercase ${
-                        f.rootCauseType === "system_bug"
-                          ? "bg-error/10 text-error"
-                          : "bg-amber-500/10 text-amber-600"
-                      }`}>
-                        {f.rootCauseType === "system_bug" ? "System Bug" : "UX Friction"}
+                      <span
+                        className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold uppercase ${
+                          f.rootCauseType === "system_bug"
+                            ? "bg-error/10 text-error"
+                            : f.rootCauseType === "self_correction"
+                              ? "bg-primary/10 text-primary"
+                              : "bg-amber-500/10 text-amber-600"
+                        }`}
+                      >
+                        {f.rootCauseType === "system_bug"
+                          ? "System Bug"
+                          : f.rootCauseType === "self_correction"
+                            ? "Self-Correction"
+                            : "UX Friction"}
                       </span>
                     </div>
                     <span className="text-[10px] font-mono text-on-surface-variant/40">
@@ -559,6 +609,62 @@ function ReportContent() {
                     <div className="bg-surface-container p-3 rounded-lg border border-outline-variant/10">
                       <p className="text-[10px] font-mono text-on-surface-variant/60 uppercase mb-1">Evidence</p>
                       <p className="text-xs text-on-surface-variant italic">&ldquo;{f.evidence}&rdquo;</p>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {/* Interaction friction — failure then recovery on same goal (session merge) */}
+        {selfCorrectionFindings.length > 0 && (
+          <section>
+            <h3 className="text-sm font-mono uppercase tracking-widest text-primary mb-2">
+              Interaction Friction &amp; Self-Correction
+            </h3>
+            <p className="text-xs text-on-surface-variant mb-6">
+              Users hit a real obstacle but completed the task through another path (e.g. direct URL). These are not dead-end failures — severity is downgraded accordingly.
+            </p>
+            <div className="space-y-4">
+              {selfCorrectionFindings.map((f, i) => (
+                <div
+                  key={i}
+                  className="bg-surface-container-lowest p-6 rounded-xl border-l-4 border-primary/50"
+                >
+                  <div className="flex items-start justify-between gap-4 mb-3">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span
+                        className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold uppercase ${
+                          f.severity === "medium"
+                            ? "bg-primary/15 text-primary"
+                            : f.severity === "minor"
+                              ? "bg-surface-container text-on-surface-variant"
+                              : "bg-amber-500/10 text-amber-600"
+                        }`}
+                      >
+                        {f.severity}
+                      </span>
+                      <span className="text-[10px] font-mono text-on-surface-variant/60 bg-surface-container px-2 py-0.5 rounded">
+                        {f.category}
+                      </span>
+                      <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold uppercase bg-primary/10 text-primary">
+                        Self-Correction
+                      </span>
+                    </div>
+                    <span className="text-[10px] font-mono text-on-surface-variant/40">{f.persona}</span>
+                  </div>
+                  <h4 className="text-sm font-bold text-on-surface mb-2">{f.title}</h4>
+                  <p className="text-xs text-on-surface-variant leading-relaxed mb-3">{f.description}</p>
+                  {f.pageUrl && (
+                    <div className="text-[10px] font-mono text-primary/70 mb-2">Page: {f.pageUrl}</div>
+                  )}
+                  {f.evidence && (
+                    <div className="bg-surface-container p-3 rounded-lg border border-outline-variant/10">
+                      <p className="text-[10px] font-mono text-on-surface-variant/60 uppercase mb-1">Evidence</p>
+                      <p className="text-xs text-on-surface-variant italic whitespace-pre-wrap">
+                        &ldquo;{f.evidence}&rdquo;
+                      </p>
                     </div>
                   )}
                 </div>
@@ -590,6 +696,11 @@ function ReportContent() {
                   <p className="text-xs text-on-surface-variant leading-relaxed">{f.description}</p>
                   {f.pageUrl && (
                     <div className="text-[10px] font-mono text-primary/70 mt-2">Page: {f.pageUrl}</div>
+                  )}
+                  {f.convergenceNote && (
+                    <p className="text-[10px] text-primary/80 mt-2 italic border-t border-outline-variant/10 pt-2">
+                      {f.convergenceNote}
+                    </p>
                   )}
                 </div>
               ))}
@@ -856,7 +967,7 @@ function ReportContent() {
             {completed.map((r) => {
               const persona = personas.find((p) => p.id === r.personaId);
               const e = r.extractedData!;
-              const personaFindings = allFindings.filter((f) => f.persona === r.personaName);
+              const personaFindings = allFindingsConverged.filter((f) => f.persona === r.personaName);
               return (
                 <div
                   key={r.personaId}
