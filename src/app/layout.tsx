@@ -1,42 +1,25 @@
 import type { Metadata } from "next";
+import { Inter } from "next/font/google";
 import "./globals.css";
-import Sidebar from "@/components/layout/Sidebar";
-import MobileHeader from "@/components/layout/MobileHeader";
-import MobileNav from "@/components/layout/MobileNav";
-import ThemeProvider from "@/components/ThemeProvider";
+
+const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "Nightshift | The Kinetic Observer",
-  description:
-    "Autonomous AI customer discovery engine. Configure, sleep, wake up to insights.",
+  title: "Website Intelligence Report",
+  description: "AI-powered product intelligence report covering UX, Conversion, Business Logic, and Growth Potential.",
 };
+
+export const maxDuration = 60; // Set Vercel execution timeout to max for Hobby tier (60s)
 
 export default function RootLayout({
   children,
-}: {
+}: Readonly<{
   children: React.ReactNode;
-}) {
+}>) {
   return (
-    <html lang="en" className="dark" suppressHydrationWarning>
-      <head>
-        <link
-          href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap"
-          rel="stylesheet"
-        />
-        <link
-          href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&display=swap"
-          rel="stylesheet"
-        />
-      </head>
-      <body className="bg-background text-on-surface font-body transition-colors duration-300">
-        <ThemeProvider>
-          <Sidebar />
-          <MobileHeader />
-          <main className="lg:ml-64 min-h-screen pb-24 lg:pb-12">
-            {children}
-          </main>
-          <MobileNav />
-        </ThemeProvider>
+    <html lang="en">
+      <body className={inter.className}>
+        {children}
       </body>
     </html>
   );
