@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { UrlInputForm } from "@/components/forms/UrlInputForm";
 import { TerminalTrace } from "@/components/ui/TerminalTrace";
 import { SyntheticUserSelection } from "@/components/dashboard/SyntheticUserSelection";
@@ -9,11 +9,12 @@ import { SimplifiedInsightDashboard } from "@/components/dashboard/SimplifiedIns
 import { DocumentLibrary } from "@/components/dashboard/DocumentLibrary";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { ErrorState } from "@/components/ui/ErrorState";
-import { TraceEvent, AppStage, SavedReport, AnalysisSession } from "@/types/pipeline";
+import { TraceEvent, AppStage, AppView, SavedReport, AnalysisSession } from "@/types/pipeline";
 import { mockTraceEvents, mockPipelineResult, mockSimulationResults, mockDashboardInsight, mockSavedReports } from "@/lib/pipeline-mock";
 
 export default function Home() {
   const [stage, setStage] = useState<AppStage>("idle");
+  const [view, setView] = useState<AppView>("workspace");
   const [currentUrl, setCurrentUrl] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
   const [traceEvents, setTraceEvents] = useState<TraceEvent[]>([]);
@@ -24,6 +25,29 @@ export default function Home() {
 
   // Current session data to allow replacing workspace state
   const [currentSession, setCurrentSession] = useState<AnalysisSession | null>(null);
+
+  const STAGE_ORDER = ["idle", "tracing", "selection", "simulating", "dashboard"];
+  const currentStageLevel = stage === "documents" ? -1 : STAGE_ORDER.indexOf(stage);
+
+  // Refs for auto-scrolling
+  const traceRef = useRef<HTMLDivElement>(null);
+  const selectionRef = useRef<HTMLDivElement>(null);
+  const simulationRef = useRef<HTMLDivElement>(null);
+  const dashboardRef = useRef<HTMLDivElement>(null);
+
+  // Auto-scroll to new blocks
+  useEffect(() => {
+    const scrollToRef = (ref: React.RefObject<HTMLDivElement>) => {
+      setTimeout(() => {
+        ref.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 100);
+    };
+
+    if (stage === "tracing") scrollToRef(traceRef);
+    if (stage === "selection") scrollToRef(selectionRef);
+    if (stage === "simulating") scrollToRef(simulationRef);
+    if (stage === "dashboard") scrollToRef(dashboardRef);
+  }, [stage]);
 
   useEffect(() => {
     const stored = localStorage.getItem("marketMirror_reports");
@@ -46,6 +70,7 @@ export default function Home() {
   };
 
   const handleNewAnalysis = () => {
+    setView("workspace");
     setStage("idle");
     setCurrentUrl("");
     setError(null);
@@ -55,11 +80,16 @@ export default function Home() {
   };
 
   const handleOpenDocuments = () => {
-    setStage("documents");
+    setView("documents");
+  };
+
+  const handleReturnToWorkspace = () => {
+    setView("workspace");
   };
 
   const handleOpenReport = (report: SavedReport) => {
     const s = report.session_data;
+    setView("workspace");
     setCurrentUrl(s.url);
     setTraceEvents(s.traceEvents);
     setSelectedUserIds(s.selectedUserIds);
@@ -177,10 +207,12 @@ export default function Home() {
   return (
     <div className="min-h-screen bg-[#020617] text-slate-200 font-sans selection:bg-blue-500/30 selection:text-blue-200 relative overflow-hidden flex">
       <Sidebar 
-        currentStage={stage} 
+        currentStage={stage}
+        currentView={view}
         currentUrl={currentUrl} 
         onNewAnalysis={handleNewAnalysis} 
         onOpenDocuments={handleOpenDocuments} 
+        onReturnToWorkspace={handleReturnToWorkspace}
       />
 
       <div className="flex-1 ml-64 relative min-h-screen overflow-y-auto">
@@ -191,15 +223,15 @@ export default function Home() {
         <main className="max-w-7xl mx-auto px-4 sm:px-8 lg:px-12 pt-20 pb-24 relative z-10">
           
           {/* Documents View */}
-          {stage === "documents" && (
+          {view === "documents" && (
             <DocumentLibrary reports={savedReports} onOpenReport={handleOpenReport} />
           )}
 
           {/* Analysis Workspace */}
-          {stage !== "documents" && (
+          {view === "workspace" && (
             <>
           {/* Hero Section */}
-          {stage === "idle" && (
+          {currentStageLevel === 0 && (
             <div className="text-center max-w-4xl mx-auto mb-16 animate-in fade-in slide-in-from-bottom-4 duration-700">
               <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-blue-900/20 border border-blue-800/50 text-blue-400 text-xs font-semibold tracking-wide uppercase mb-8 shadow-[0_0_20px_rgba(37,99,235,0.1)]">
                 <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse"></span>
@@ -216,22 +248,22 @@ export default function Home() {
           )}
 
               {/* Input Form (visible on idle or tracing) */}
-              {(stage === "idle" || stage === "tracing") && (
-                <div className={`transition-all duration-500 ${stage === "tracing" ? 'mb-12' : 'mt-8'}`}>
+              {currentStageLevel >= 0 && (
+                <div className={`transition-all duration-500 ${currentStageLevel >= 1 ? 'mb-16' : 'mt-8'}`}>
                   <UrlInputForm onSubmit={handleAudit} isLoading={stage === "tracing"} />
                 </div>
               )}
 
               {/* Stage 1: Pipeline Trace */}
-              {stage === "tracing" && (
-                <div className="mt-12 animate-in fade-in slide-in-from-bottom-4 duration-700">
+              {currentStageLevel >= 1 && (
+                <div ref={traceRef} className={`animate-in fade-in slide-in-from-bottom-4 duration-700 ${currentStageLevel > 1 ? 'mb-16 pb-16 border-b border-slate-800/50' : 'mt-12'}`}>
                   <TerminalTrace events={traceEvents} />
                 </div>
               )}
 
               {/* Stage 2: Selection */}
-              {stage === "selection" && currentSession?.pipelineData && (
-                <div className="mt-12 animate-in fade-in slide-in-from-bottom-4 duration-700">
+              {currentStageLevel >= 2 && currentSession?.pipelineData && (
+                <div ref={selectionRef} className={`animate-in fade-in slide-in-from-bottom-4 duration-700 ${currentStageLevel > 2 ? 'mb-16 pb-16 border-b border-slate-800/50' : 'mt-12'}`}>
                   <SyntheticUserSelection 
                     users={currentSession.pipelineData.personas} 
                     onStartSimulation={handleStartSimulation} 
@@ -240,19 +272,19 @@ export default function Home() {
               )}
 
               {/* Stage 3: Live Simulation */}
-              {stage === "simulating" && currentSession?.pipelineData && (
-                <div className="mt-12 animate-in fade-in slide-in-from-bottom-4 duration-700">
+              {currentStageLevel >= 3 && currentSession?.pipelineData && (
+                <div ref={simulationRef} className={`animate-in fade-in slide-in-from-bottom-4 duration-700 ${currentStageLevel > 3 ? 'mb-16 pb-16 border-b border-slate-800/50' : 'mt-12'}`}>
                   <SimulationResults 
                     users={currentSession.pipelineData.personas} 
-                    results={mockSimulationResults} 
+                    results={currentSession.simulationResults?.length > 0 ? currentSession.simulationResults : mockSimulationResults} 
                     onContinue={() => setStage("dashboard")}
                   />
                 </div>
               )}
 
               {/* Stage 4: Aggregate Insight Dashboard */}
-              {stage === "dashboard" && currentSession?.pipelineData && currentSession?.dashboardInsight && (
-                <div className="mt-12 animate-in fade-in slide-in-from-bottom-4 duration-700">
+              {currentStageLevel >= 4 && currentSession?.pipelineData && currentSession?.dashboardInsight && (
+                <div ref={dashboardRef} className="mt-12 mb-24 animate-in fade-in slide-in-from-bottom-4 duration-700">
                   <SimplifiedInsightDashboard 
                     insight={currentSession.dashboardInsight} 
                     pipelineData={currentSession.pipelineData} 

@@ -134,6 +134,8 @@ export interface PipelineResult {
 
 export type AppStage = "idle" | "tracing" | "selection" | "simulating" | "dashboard" | "documents";
 
+export type AppView = "workspace" | "documents";
+
 export interface AnalysisSession {
   url: string;
   stage: AppStage;

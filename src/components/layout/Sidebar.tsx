@@ -1,16 +1,18 @@
 "use client";
 
-import { AppStage } from "@/types/pipeline";
-import { Plus, FolderOpen, LayoutDashboard, Search, Settings } from "lucide-react";
+import { AppStage, AppView } from "@/types/pipeline";
+import { Plus, FolderOpen, LayoutDashboard, Search, Settings, ChevronRight } from "lucide-react";
 
 interface SidebarProps {
   currentStage: AppStage;
+  currentView?: AppView;
   currentUrl?: string;
   onNewAnalysis: () => void;
   onOpenDocuments: () => void;
+  onReturnToWorkspace?: () => void;
 }
 
-export function Sidebar({ currentStage, currentUrl, onNewAnalysis, onOpenDocuments }: SidebarProps) {
+export function Sidebar({ currentStage, currentView = "workspace", currentUrl, onNewAnalysis, onOpenDocuments, onReturnToWorkspace }: SidebarProps) {
   const getStageLabel = () => {
     switch (currentStage) {
       case "idle": return "Ready";
@@ -46,11 +48,31 @@ export function Sidebar({ currentStage, currentUrl, onNewAnalysis, onOpenDocumen
           Current Workspace
         </div>
         
-        <div className="bg-slate-900/50 border border-slate-800 rounded-lg p-3 space-y-3">
+        <div 
+          onClick={() => {
+            if (currentUrl && onReturnToWorkspace) {
+              onReturnToWorkspace();
+            }
+          }}
+          className={`rounded-lg p-3 space-y-3 transition-all ${
+            currentUrl 
+              ? currentView === "workspace"
+                ? "bg-blue-900/10 border border-blue-500/30 shadow-[0_0_15px_rgba(37,99,235,0.05)] cursor-default"
+                : "bg-slate-900/50 border border-slate-800 hover:border-slate-700 hover:bg-slate-900 cursor-pointer group"
+              : "bg-slate-900/30 border border-slate-800/50 cursor-default"
+          }`}
+        >
           {currentUrl ? (
             <div>
-              <div className="text-[10px] text-slate-500 uppercase">Target URL</div>
-              <div className="text-sm font-mono text-slate-300 truncate" title={currentUrl}>
+              <div className="flex items-center justify-between">
+                <div className="text-[10px] text-slate-500 uppercase">Target URL</div>
+                {currentView === "documents" && (
+                  <div className="text-[10px] text-blue-400 opacity-0 group-hover:opacity-100 transition-opacity flex items-center">
+                    Resume <ChevronRight className="w-3 h-3 ml-0.5" />
+                  </div>
+                )}
+              </div>
+              <div className="text-sm font-mono text-slate-300 truncate mt-1" title={currentUrl}>
                 {currentUrl.replace(/^https?:\/\//, '')}
               </div>
             </div>
@@ -58,10 +80,10 @@ export function Sidebar({ currentStage, currentUrl, onNewAnalysis, onOpenDocumen
             <div className="text-sm text-slate-500 italic">No active session</div>
           )}
 
-          <div className="pt-2 border-t border-slate-800/50">
+          <div className={`pt-2 border-t ${currentUrl && currentView === "workspace" ? "border-blue-500/20" : "border-slate-800/50"}`}>
             <div className="flex items-center justify-between">
               <span className="text-xs text-slate-400">Status</span>
-              <span className="text-xs text-blue-400 font-semibold">{getStageLabel()}</span>
+              <span className={`text-xs font-semibold ${currentUrl && currentView === "workspace" ? "text-blue-400" : "text-slate-500"}`}>{getStageLabel()}</span>
             </div>
           </div>
         </div>
@@ -79,7 +101,7 @@ export function Sidebar({ currentStage, currentUrl, onNewAnalysis, onOpenDocumen
 
         <button 
           onClick={onOpenDocuments}
-          className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors ${currentStage === "documents" ? "bg-blue-900/40 border border-blue-800/50 text-blue-400" : "text-slate-300 hover:bg-slate-800 hover:text-white"}`}
+          className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors ${currentView === "documents" ? "bg-blue-900/40 border border-blue-800/50 text-blue-400" : "text-slate-300 hover:bg-slate-800 hover:text-white"}`}
         >
           <FolderOpen className="w-4 h-4" />
           Document Library
