@@ -113,7 +113,9 @@ export interface TaskResult {
 
 export interface SimulationResult {
   persona_id: string;
+  persona_label?: string;
   browsing_summary: string;
+  resonance_score?: number;
   tasks: TaskResult[];
   main_friction: string[];
 }

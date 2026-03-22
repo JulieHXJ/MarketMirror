@@ -30,6 +30,7 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const [traceEvents, setTraceEvents] = useState<TraceEvent[]>([]);
   const [selectedUserIds, setSelectedUserIds] = useState<string[]>([]);
+  const [currentInterviewingName, setCurrentInterviewingName] = useState<string | null>(null);
   
   // Persistent Storage State
   const [savedReports, setSavedReports] = useState<SavedReport[]>([]);
@@ -87,28 +88,141 @@ export default function Home() {
     },
   });
 
-  const toTraceEvent = (event: Record<string, unknown>, index: number): TraceEvent => {
+  const toTraceEvent = (event: Record<string, unknown>, index: number): TraceEvent | null => {
     const eventType = typeof event.type === "string" ? event.type : "unknown";
+    const eventMessage = typeof event.message === "string" ? event.message : "Processing";
+
+    if (eventType === "action") {
+      return null;
+    }
+
+    if (eventType === "thinking" && !eventMessage.toLowerCase().includes("generating customer personas")) {
+      return null;
+    }
+
     const status: TraceEvent["status"] =
       eventType === "error"
         ? "error"
-        : eventType === "done" || eventType === "result"
-          ? "done"
-          : "running";
+        : eventType === "thinking"
+          ? "running"
+          : "done";
 
     const traceEvent: TraceEvent = {
       id: `${typeof event.timestamp === "string" ? event.timestamp : Date.now()}-${index}`,
-      message: typeof event.message === "string" ? event.message : "Processing",
+      message: eventMessage,
       status,
       details: eventType,
     };
 
+    if (eventType === "observation") {
+      const observationData =
+        event.data && typeof event.data === "object"
+          ? (event.data as Record<string, unknown>)
+          : {};
+      const kind = typeof observationData.kind === "string" ? observationData.kind : "";
+
+      if (kind === "fetch") {
+        traceEvent.message = "Fetching homepage...";
+        traceEvent.type = "fetch";
+        traceEvent.data = {
+          url: typeof observationData.url === "string" ? observationData.url : currentUrl,
+          statusCode: typeof observationData.statusCode === "number" ? observationData.statusCode : 200,
+          pageTitle: typeof observationData.pageTitle === "string" ? observationData.pageTitle : "",
+          htmlSize: typeof observationData.htmlSize === "string" ? observationData.htmlSize : "",
+        };
+      }
+
+      if (kind === "links") {
+        const links = Array.isArray(observationData.links)
+          ? observationData.links.filter((link): link is string => typeof link === "string")
+          : [];
+        traceEvent.message = "Discovering navigation links...";
+        traceEvent.type = "links";
+        traceEvent.data = {
+          discoveredLinks: links.map((link) => {
+            try {
+              return new URL(link).pathname || "/";
+            } catch {
+              return link;
+            }
+          }),
+        };
+      }
+
+      if (kind === "extraction") {
+        const headings = Array.isArray(observationData.headings)
+          ? observationData.headings.filter((item): item is string => typeof item === "string")
+          : [];
+        const buttons = Array.isArray(observationData.buttons)
+          ? observationData.buttons.filter((item): item is string => typeof item === "string")
+          : [];
+        const featureBlocks = Array.isArray(observationData.featureBlocks)
+          ? observationData.featureBlocks.filter((item): item is string => typeof item === "string")
+          : [];
+        traceEvent.message = "Extracting content blocks...";
+        traceEvent.type = "extraction";
+        traceEvent.data = {
+          extractedEvidence: {
+            headings,
+            copySnippets: [],
+            buttons,
+            forms: [],
+            featureBlocks,
+            trustSignals: [],
+            integrations: [],
+          },
+        };
+      }
+
+      if (kind === "classification") {
+        const pages = Array.isArray(observationData.pages)
+          ? observationData.pages
+              .filter((page): page is Record<string, unknown> => !!page && typeof page === "object")
+              .map((page) => ({
+                url: typeof page.url === "string" ? page.url : "",
+                pageType:
+                  page.pageType === "homepage" ||
+                  page.pageType === "pricing" ||
+                  page.pageType === "about" ||
+                  page.pageType === "features" ||
+                  page.pageType === "blog" ||
+                  page.pageType === "contact"
+                    ? page.pageType
+                    : "other",
+                confidence: typeof page.confidence === "number" ? page.confidence : 70,
+              }))
+          : [];
+        traceEvent.message = "Classifying page types...";
+        traceEvent.type = "classification";
+        traceEvent.data = {
+          classifiedPages: pages,
+        };
+      }
+
+      if (kind === "inference") {
+        traceEvent.message = "Inferring website category...";
+        traceEvent.type = "inference";
+        traceEvent.data = {
+          primaryCategory:
+            typeof observationData.primaryCategory === "string"
+              ? observationData.primaryCategory
+              : "Other",
+          secondaryCategory:
+            typeof observationData.secondaryCategory === "string"
+              ? observationData.secondaryCategory
+              : "General",
+        };
+      }
+    }
+
     if (eventType === "screenshot") {
       const screenshotUrl = typeof event.screenshot === "string" ? event.screenshot : "";
       if (screenshotUrl) {
+        const deviceByIndex: ("Desktop" | "Tablet" | "Mobile")[] = ["Desktop", "Tablet", "Mobile"];
         traceEvent.type = "screenshots";
+        traceEvent.message = "Capturing screenshots...";
         traceEvent.data = {
-          screenshots: [{ device: "Desktop", url: screenshotUrl }],
+          screenshots: [{ device: deviceByIndex[index % 3], url: screenshotUrl }],
         };
       }
     }
@@ -132,11 +246,21 @@ export default function Home() {
     if (eventType === "result") {
       const resultData = event.data as { analysis?: WebsiteAnalysis; personas?: Persona[] } | undefined;
       const personaCount = Array.isArray(resultData?.personas) ? resultData.personas.length : 0;
-      traceEvent.message = `Generated ${personaCount} customer personas from exploration. Select personas to start synthetic user simulation.`;
+      traceEvent.message = `Generating constrained candidate personas...`;
       traceEvent.type = "generation";
       traceEvent.data = {
         generatedCount: personaCount,
       };
+    }
+
+    if (eventType === "thinking" && eventMessage.toLowerCase().includes("generating customer personas")) {
+      traceEvent.message = "Generating constrained candidate personas...";
+      traceEvent.type = "generation";
+      traceEvent.status = "running";
+    }
+
+    if (!traceEvent.type && traceEvent.status !== "error") {
+      return null;
     }
 
     return traceEvent;
@@ -152,8 +276,13 @@ export default function Home() {
       objections: uniqueObjections.length > 0 ? uniqueObjections : ["No major objections captured in completed interviews."],
       feature_priority: ["Clarify pricing", "Improve trust proof", "Reduce onboarding friction"],
       segment_scores: results.map((r) => ({
-        segment: r.persona_id,
-        score: r.tasks.length === 0 ? 50 : Math.round((r.tasks.filter((t) => t.status === "Success").length / r.tasks.length) * 100),
+        segment: r.persona_label || r.persona_id,
+        score:
+          typeof r.resonance_score === "number"
+            ? Math.max(0, Math.min(100, Math.round(r.resonance_score)))
+            : r.tasks.length === 0
+              ? 50
+              : Math.round((r.tasks.filter((t) => t.status === "Success").length / r.tasks.length) * 100),
       })),
     };
   };
@@ -196,6 +325,7 @@ export default function Home() {
     setError(null);
     setTraceEvents([]);
     setSelectedUserIds([]);
+    setCurrentInterviewingName(null);
     setCurrentSession(null);
   };
 
@@ -219,6 +349,7 @@ export default function Home() {
     setError(null);
     setTraceEvents([]);
     setSelectedUserIds([]);
+    setCurrentInterviewingName(null);
     setCurrentSession(null);
   };
 
@@ -304,6 +435,7 @@ export default function Home() {
       const decoder = new TextDecoder();
       let buffer = "";
       let hasResultEvent = false;
+      let eventSeq = 0;
 
       while (true) {
         const { done, value } = await reader.read();
@@ -317,13 +449,71 @@ export default function Home() {
           if (line.startsWith("data: ")) {
             try {
               const rawEvent = JSON.parse(line.slice(6)) as Record<string, any>;
-              const event = toTraceEvent(rawEvent, Math.random());
+              const event = toTraceEvent(rawEvent, eventSeq++);
+              if (!event) {
+                continue;
+              }
               
               setTraceEvents((prev) => {
                 const completedPrev = prev.map((item) =>
                   item.status === "running" ? { ...item, status: "done" as const } : item
                 );
-                const next = [...completedPrev, event];
+                let next: TraceEvent[];
+
+                if (event.type === "screenshots" && event.data?.screenshots?.length) {
+                  const incoming = event.data.screenshots[0];
+                  const existingIndex = completedPrev.findIndex((item) => item.type === "screenshots");
+
+                  if (existingIndex >= 0) {
+                    const existing = completedPrev[existingIndex];
+                    const existingShots = existing.data?.screenshots || [];
+                    const mergedShots = [...existingShots];
+                    if (!mergedShots.some((shot) => shot.url === incoming.url)) {
+                      mergedShots.push(incoming);
+                    }
+
+                    const updated = {
+                      ...existing,
+                      status: "done" as const,
+                      message: "Capturing screenshots...",
+                      data: {
+                        ...existing.data,
+                        screenshots: mergedShots.slice(-3),
+                      },
+                    };
+
+                    next = completedPrev.map((item, idx) => (idx === existingIndex ? updated : item));
+                  } else {
+                    next = [...completedPrev, event];
+                  }
+                } else if (event.type === "generation") {
+                  const existingGenerationIndex = completedPrev.findIndex(
+                    (item) => item.type === "generation"
+                  );
+
+                  if (existingGenerationIndex >= 0) {
+                    const existingGeneration = completedPrev[existingGenerationIndex];
+                    const mergedGeneration: TraceEvent = {
+                      ...existingGeneration,
+                      ...event,
+                      id: existingGeneration.id,
+                      status: event.status,
+                      data: {
+                        ...existingGeneration.data,
+                        ...event.data,
+                      },
+                    };
+
+                    next = completedPrev.map((item, idx) =>
+                      idx === existingGenerationIndex ? mergedGeneration : item
+                    );
+                  } else {
+                    next = [...completedPrev, event];
+                  }
+                } else {
+                  next = [...completedPrev, event];
+                }
+
                 setCurrentSession((s) => {
                   if (!s) {
                     return {
@@ -446,6 +636,7 @@ export default function Home() {
         try {
           // Convert CandidatePersona back to Persona format for the API
           const persona = toPersona(candidatePersona);
+          setCurrentInterviewingName(persona.name);
           
           const res = await fetch("/api/interview", {
             method: "POST",
@@ -529,17 +720,76 @@ export default function Home() {
           }
 
           if (result) {
+            const extracted =
+              result.extractedData && typeof result.extractedData === "object"
+                ? (result.extractedData as Record<string, unknown>)
+                : {};
+
+            const buySignal =
+              typeof extracted.buySignal === "number" ? extracted.buySignal : null;
+            const overallVerdict =
+              typeof extracted.overallVerdict === "string" ? extracted.overallVerdict : "";
+            const overallSentiment =
+              typeof extracted.overallSentiment === "string" ? extracted.overallSentiment : "";
+            const wouldRecommend =
+              typeof extracted.wouldRecommend === "boolean" ? extracted.wouldRecommend : false;
+            const topObjections = Array.isArray(extracted.topObjections)
+              ? extracted.topObjections.filter((item): item is string => typeof item === "string")
+              : [];
+            const topDislikes = Array.isArray(extracted.topDislikes)
+              ? extracted.topDislikes.filter((item): item is string => typeof item === "string")
+              : [];
+            const uxIssues = Array.isArray(extracted.uxIssues)
+              ? extracted.uxIssues.filter((item): item is string => typeof item === "string")
+              : [];
+            const bugs = Array.isArray(extracted.bugs)
+              ? extracted.bugs.filter((item): item is string => typeof item === "string")
+              : [];
+            const confusingElements = Array.isArray(extracted.confusingElements)
+              ? extracted.confusingElements.filter((item): item is string => typeof item === "string")
+              : [];
+
+            const frictionItems = Array.from(
+              new Set([...topObjections, ...topDislikes, ...uxIssues, ...bugs, ...confusingElements])
+            ).slice(0, 5);
+
+            const blockers = uxIssues.length + bugs.length + confusingElements.length;
+            const navigationStatus: "Success" | "Partial" | "Failed" =
+              blockers === 0 ? "Success" : blockers <= 2 ? "Partial" : "Failed";
+            const valueStatus: "Success" | "Partial" | "Failed" =
+              buySignal === null ? "Partial" : buySignal >= 7 ? "Success" : buySignal >= 4 ? "Partial" : "Failed";
+            const conversionStatus: "Success" | "Partial" | "Failed" =
+              wouldRecommend && topObjections.length <= 1
+                ? "Success"
+                : topObjections.length <= 3
+                  ? "Partial"
+                  : "Failed";
+
+            const summaryParts = [
+              overallVerdict,
+              overallSentiment ? `Sentiment: ${overallSentiment}` : "",
+              buySignal !== null ? `Buy signal: ${buySignal}/10` : "",
+            ].filter(Boolean);
+
             const mappedResult: SimulationResult = {
               persona_id: String(result.personaId || persona.id),
-              browsing_summary: String(result.extractedData?.buySignal || "Session completed"),
+              persona_label: persona.name,
+              browsing_summary:
+                summaryParts.length > 0
+                  ? summaryParts.join(" • ")
+                  : "Session completed with limited structured feedback.",
+              resonance_score:
+                buySignal !== null
+                  ? buySignal * 10
+                  : wouldRecommend
+                    ? 70
+                    : 45,
               tasks: [
-                { task_name: "Navigate key pages", status: "Success" },
-                { task_name: "Evaluate value proposition", status: "Success" },
-                { task_name: "Assess conversion readiness", status: "Partial" },
+                { task_name: "Navigate key pages", status: navigationStatus },
+                { task_name: "Evaluate value proposition", status: valueStatus },
+                { task_name: "Assess conversion readiness", status: conversionStatus },
               ],
-              main_friction: Array.isArray(result.extractedData?.topObjections)
-                ? result.extractedData.topObjections
-                : [],
+              main_friction: frictionItems,
             };
 
             simulationResults.push(mappedResult);
@@ -558,6 +808,8 @@ export default function Home() {
         }
       }
 
+      setCurrentInterviewingName(null);
+
       // Move to dashboard after all interviews complete
       if (simulationResults.length === 0) {
         throw new Error("No interview results returned from API");
@@ -573,6 +825,7 @@ export default function Home() {
       } : null);
     } catch (err) {
       console.error("Simulation error:", err);
+      setCurrentInterviewingName(null);
       setError(err instanceof Error ? err.message : "Simulation failed");
       setStage("selection");
     }
@@ -650,8 +903,11 @@ export default function Home() {
               {currentStageLevel >= 3 && currentSession?.pipelineData && (
                 <div ref={simulationRef} className={`animate-in fade-in slide-in-from-bottom-4 duration-700 ${currentStageLevel > 3 ? 'mb-16 pb-16 border-b border-slate-800/50' : 'mt-12'}`}>
                   <SimulationResults 
-                    users={currentSession.pipelineData.personas} 
+                    users={currentSession.pipelineData.personas.filter((persona) =>
+                      currentSession.selectedUserIds.includes(persona.id)
+                    )} 
                     results={currentSession.simulationResults || []} 
+                    currentInterviewingName={stage === "simulating" ? currentInterviewingName : null}
                     onContinue={() => {
                       // Ensure dashboardInsight is set when moving to dashboard
                       if (!currentSession?.dashboardInsight && currentSession?.simulationResults) {
@@ -670,6 +926,7 @@ export default function Home() {
                   <SimplifiedInsightDashboard 
                     insight={currentSession?.dashboardInsight || buildInsightFromResults(currentSession?.simulationResults || [])} 
                     pipelineData={currentSession.pipelineData} 
+                    simulationResults={currentSession.simulationResults || []}
                     onSaveReport={handleSaveReport}
                   />
                 </div>

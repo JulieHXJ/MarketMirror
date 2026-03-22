@@ -1,15 +1,16 @@
 "use client";
 
 import { CandidatePersona, SimulationResult } from "@/types/pipeline";
-import { AlertCircle, CheckCircle2, XCircle } from "lucide-react";
+import { AlertCircle, CheckCircle2, Loader2, XCircle } from "lucide-react";
 
 interface SimulationResultsProps {
   users: CandidatePersona[];
   results: SimulationResult[];
+  currentInterviewingName?: string | null;
   onContinue: () => void;
 }
 
-export function SimulationResults({ users, results, onContinue }: SimulationResultsProps) {
+export function SimulationResults({ users, results, currentInterviewingName, onContinue }: SimulationResultsProps) {
   const progressPercent = users.length > 0 ? (results.length / users.length) * 100 : 0;
   const isComplete = results.length === users.length;
 
@@ -35,6 +36,13 @@ export function SimulationResults({ users, results, onContinue }: SimulationResu
               style={{ width: `${progressPercent}%` }}
             />
           </div>
+
+          {currentInterviewingName && !isComplete && (
+            <div className="mt-3 flex items-center gap-2 text-sm text-blue-300">
+              <Loader2 className="w-4 h-4 animate-spin" />
+              <span className="animate-pulse">Having interview with {currentInterviewingName}...</span>
+            </div>
+          )}
         </div>
       </div>
 

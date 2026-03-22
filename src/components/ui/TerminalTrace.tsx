@@ -19,7 +19,7 @@ export function TerminalTrace({ events = [] }: TerminalTraceProps) {
   // Auto-expand events when they finish running
   useEffect(() => {
     validEvents.forEach(event => {
-      if (event.status === "done" && !expandedEvents.has(event.id)) {
+      if (event.status === "done" && event.type !== "extraction" && !expandedEvents.has(event.id)) {
         setExpandedEvents(prev => new Set(prev).add(event.id));
       }
     });

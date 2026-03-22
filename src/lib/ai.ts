@@ -69,12 +69,17 @@ export async function generatePersonas(
   analysis: WebsiteAnalysis,
   count: number = 10
 ): Promise<Persona[]> {
+  const keyFeaturesText = Array.isArray(analysis.keyFeatures) 
+    ? analysis.keyFeatures.join(", ")
+    : typeof analysis.keyFeatures === "string"
+      ? analysis.keyFeatures
+      : "";
   const prompt = `You are generating synthetic customer personas for user research on this product/service:
 
 Product: ${analysis.productName}
 Description: ${analysis.productDescription}
 Target Audience: ${analysis.targetAudience}
-Key Features: ${analysis.keyFeatures.join(", ")}
+Key Features: ${keyFeaturesText}
 Industry: ${analysis.industry}
 
 Generate ${count} diverse, realistic personas who would be potential customers or users of this product/service. Each persona should represent a different segment, motivation, or demographic.
@@ -147,12 +152,17 @@ export async function runInterview(
   persona: Persona,
   analysis: WebsiteAnalysis
 ): Promise<InterviewResult> {
+  const keyFeaturesText = Array.isArray(analysis.keyFeatures) 
+    ? analysis.keyFeatures.join(", ")
+    : typeof analysis.keyFeatures === "string"
+      ? analysis.keyFeatures
+      : "";
   const prompt = `Simulate a customer discovery interview. You play BOTH the interviewer and the persona.
 
 PRODUCT/SERVICE:
 Name: ${analysis.productName}
 Description: ${analysis.productDescription}
-Features: ${analysis.keyFeatures.join(", ")}
+Features: ${keyFeaturesText}
 
 PERSONA TO SIMULATE:
 Name: ${persona.name}, Age: ${persona.age}

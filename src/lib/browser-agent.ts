@@ -121,6 +121,42 @@ export interface AgentEvent {
   timestamp: string;
 }
 
+function inferPageTypeFromUrl(url: string): "homepage" | "pricing" | "about" | "features" | "blog" | "contact" | "other" {
+  const lower = url.toLowerCase();
+  if (lower.endsWith("/") || lower.match(/^https?:\/\/[^/]+\/?$/)) return "homepage";
+  if (lower.includes("pricing") || lower.includes("plans")) return "pricing";
+  if (lower.includes("about") || lower.includes("company") || lower.includes("team")) return "about";
+  if (lower.includes("feature") || lower.includes("product") || lower.includes("solution")) return "features";
+  if (lower.includes("blog") || lower.includes("news") || lower.includes("article")) return "blog";
+  if (lower.includes("contact") || lower.includes("support") || lower.includes("help")) return "contact";
+  return "other";
+}
+
+function inferWebsiteCategory(analysis: WebsiteAnalysis): { primary: string; secondary: string } {
+  const text = `${analysis.productName} ${analysis.productDescription} ${analysis.industry}`.toLowerCase();
+
+  if (text.includes("saas") || text.includes("b2b") || text.includes("workspace") || text.includes("dashboard")) {
+    return { primary: "SaaS", secondary: "B2B Software" };
+  }
+  if (text.includes("ecommerce") || text.includes("shop") || text.includes("checkout") || text.includes("cart")) {
+    return { primary: "Ecommerce", secondary: "Online Retail" };
+  }
+  if (text.includes("ai") || text.includes("model") || text.includes("llm") || text.includes("automation")) {
+    return { primary: "AI Product", secondary: "AI-Native Software" };
+  }
+  if (text.includes("developer") || text.includes("api") || text.includes("sdk") || text.includes("docs")) {
+    return { primary: "Developer Tool", secondary: "Technical Platform" };
+  }
+  if (text.includes("education") || text.includes("course") || text.includes("learn")) {
+    return { primary: "Education", secondary: "Learning Platform" };
+  }
+  if (text.includes("marketplace")) {
+    return { primary: "Marketplace", secondary: "Two-Sided Platform" };
+  }
+
+  return { primary: "Other", secondary: "Consumer Internet" };
+}
+
 export type AgentEventCallback = (event: AgentEvent) => void;
 
 // Tools available to the agent — no take_screenshot since screenshots are automatic
@@ -719,6 +755,17 @@ async function executeTool(
           buttons: buttons.slice(0, 10),
         };
       });
+      emit({
+        type: "observation",
+        message: "Extracting content blocks...",
+        data: {
+          kind: "extraction",
+          headings: content.headings,
+          buttons: content.buttons,
+          featureBlocks: [...content.paragraphs, ...content.lists].slice(0, 8),
+        },
+        timestamp: new Date().toISOString(),
+      });
       const screenshot = await captureScreenshot(page, emit, `Content extracted from ${content.url}`, dedup);
       return { text: JSON.stringify(content, null, 2), screenshot: screenshot || undefined };
     }
@@ -758,6 +805,15 @@ async function executeTool(
           .slice(0, 25);
       });
       for (const link of links) discoveredUrls.add(link.href);
+      emit({
+        type: "observation",
+        message: "Discovering navigation links...",
+        data: {
+          kind: "links",
+          links: links.map((link) => link.href),
+        },
+        timestamp: new Date().toISOString(),
+      });
       const linksScreenshot = await captureScreenshot(page, emit, `Links on ${page.url()}`, dedup);
       return { text: JSON.stringify(links, null, 2), screenshot: linksScreenshot || undefined };
     }
@@ -918,7 +974,7 @@ export async function runBrowserAgent(
     const page = await context.newPage();
 
     // Navigate to the target URL
-    await page.goto(targetUrl, { waitUntil: "networkidle", timeout: 20000 });
+    const initialResponse = await page.goto(targetUrl, { waitUntil: "networkidle", timeout: 20000 });
     await page.waitForTimeout(1500);
 
     // Aggressively dismiss consent banners (up to 3 rounds)
@@ -951,6 +1007,20 @@ export async function runBrowserAgent(
         if (t && t.length > 15) paragraphs.push(t.substring(0, 300));
       });
       return { title: document.title, headings, paragraphs: paragraphs.slice(0, 5) };
+    });
+
+    const htmlSize = await page.content().then((html) => html.length).catch(() => 0);
+    emit({
+      type: "observation",
+      message: "Fetching homepage...",
+      data: {
+        kind: "fetch",
+        url: targetUrl,
+        statusCode: initialResponse?.status() ?? 200,
+        pageTitle: initialContent.title,
+        htmlSize: `${Math.max(1, Math.round(htmlSize / 1024))} KB`,
+      },
+      timestamp: new Date().toISOString(),
     });
 
     // Build conversation
@@ -1114,6 +1184,36 @@ CONSENT / PLATFORM NOISE:
       industry: (analysisResult?.industry as string) || "",
     };
 
+    const classifiedPages = Array.from(discoveredUrls)
+      .slice(0, 8)
+      .map((url) => ({
+        url,
+        pageType: inferPageTypeFromUrl(url),
+        confidence: inferPageTypeFromUrl(url) === "other" ? 72 : 95,
+      }));
+
+    emit({
+      type: "observation",
+      message: "Classifying page types...",
+      data: {
+        kind: "classification",
+        pages: classifiedPages,
+      },
+      timestamp: new Date().toISOString(),
+    });
+
+    const category = inferWebsiteCategory(analysis);
+    emit({
+      type: "observation",
+      message: "Inferring website category...",
+      data: {
+        kind: "inference",
+        primaryCategory: category.primary,
+        secondaryCategory: category.secondary,
+      },
+      timestamp: new Date().toISOString(),
+    });
+
     log.info(`Website analysis complete`, analysis);
 
     emit({
@@ -1156,7 +1256,7 @@ async function generatePersonasFromAnalysis(
 Product: ${analysis.productName}
 Description: ${analysis.productDescription}
 Target Audience: ${analysis.targetAudience}
-Features: ${analysis.keyFeatures.join(", ")}
+Features: ${Array.isArray(analysis.keyFeatures) ? analysis.keyFeatures.join(", ") : typeof analysis.keyFeatures === "string" ? analysis.keyFeatures : ""}
 Industry: ${analysis.industry}
 
 Generate realistic personas who would visit this website. Ensure diversity in age, background, tech savviness, and motivation.
