@@ -19,6 +19,11 @@ interface ExtractedData {
   killerQuote: string;
   surpriseInsight: string;
   overallSentiment: string;
+  overallVerdict?: string;
+  bugs?: string[];
+  uxIssues?: string[];
+  confusingElements?: string[];
+  topDislikes?: string[];
   detailedFindings?: Finding[];
 }
 
@@ -338,10 +343,36 @@ function ReportContent() {
   const accessIssueKeywords = /unable to.*evaluat|environment|consent|login.*wall|captcha|blocked|access.*restrict|cannot.*access|could not.*access/i;
   const accessBlockedCount = extracted.filter((e) =>
     accessIssueKeywords.test(e.overallSentiment || "") ||
-    accessIssueKeywords.test((e as Record<string, unknown>).overallVerdict as string || "")
+    accessIssueKeywords.test(e.overallVerdict || "")
   ).length;
 
+  const blankScreenKeywords =
+    /blank screen|blank page|empty screen|page is empty|nothing visible|no content|schwarz|schwarzer bildschirm|weißer bildschirm|black screen|went blank|completely empty/i;
+
+  function textBlob(e: ExtractedData): string {
+    return [
+      e.killerQuote,
+      e.overallSentiment,
+      e.overallVerdict,
+      ...(e.bugs || []),
+      ...(e.uxIssues || []),
+      ...(e.confusingElements || []),
+      ...(e.topDislikes || []),
+      ...(e.topObjections || []),
+    ]
+      .filter(Boolean)
+      .join(" ");
+  }
+
+  const blankScreenCount = extracted.filter((e) => blankScreenKeywords.test(textBlob(e))).length;
+  /** 100% personas describe blank/empty after load — likely consent wall / anti-bot, not product quality */
+  const consentWallBlankConsensus =
+    completed.length > 0 &&
+    blankScreenCount === completed.length &&
+    (demandPercent === 0 || zeroBuyCount === extracted.length);
+
   const hasEnvironmentWarning =
+    consentWallBlankConsensus ||
     (failedCount > results.length * 0.5) ||
     (zeroBuyCount >= extracted.length && extracted.length > 0 && demandPercent === 0) ||
     (accessBlockedCount > completed.length * 0.5);
@@ -357,11 +388,13 @@ function ReportContent() {
               <div>
                 <h3 className="text-sm font-bold text-amber-500 mb-1">Environment Warning</h3>
                 <p className="text-xs text-on-surface-variant leading-relaxed">
-                  {failedCount > results.length * 0.5
-                    ? `${failedCount} of ${results.length} interviews failed. The test environment may have blocked access (consent walls, CAPTCHAs, login requirements, or firewall rules).`
-                    : accessBlockedCount > completed.length * 0.5
-                      ? `${accessBlockedCount} of ${completed.length} personas reported access limitations. The results below may not reflect the actual product quality.`
-                      : `All ${extracted.length} personas gave a 0% buy signal. This typically indicates the testing environment was blocked by consent walls, login requirements, or geographic restrictions — not that the product has zero value.`
+                  {consentWallBlankConsensus
+                    ? "Every persona reported a blank or empty page after navigation — this pattern usually means a Consent Wall, bot challenge, or network blocking, not a product failure. Results are not reliable for product-market fit. Please verify network access, anti-bot settings, and try again in a non-headless or residential environment if needed."
+                    : failedCount > results.length * 0.5
+                      ? `${failedCount} of ${results.length} interviews failed. The test environment may have blocked access (consent walls, CAPTCHAs, login requirements, or firewall rules).`
+                      : accessBlockedCount > completed.length * 0.5
+                        ? `${accessBlockedCount} of ${completed.length} personas reported access limitations. The results below may not reflect the actual product quality.`
+                        : `All ${extracted.length} personas gave a 0% buy signal. This typically indicates the testing environment was blocked by consent walls, login requirements, or geographic restrictions — not that the product has zero value.`
                   }
                   {" "}Consider re-running the test with a different URL or after verifying the site is accessible from the testing environment.
                 </p>

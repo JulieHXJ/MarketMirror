@@ -281,6 +281,97 @@ const TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   },
 ];
 
+async function tryScriptConsentClick(page: Page): Promise<boolean> {
+  try {
+    const clicked = await page.evaluate(() => {
+      const selectors = [
+        'button[aria-label*="akzeptieren" i]',
+        'button[aria-label*="Akzeptieren" i]',
+        'button[aria-label*="Alle akzeptieren" i]',
+        'button[aria-label*="Accept" i]',
+        'button[aria-label*="Zustimmen" i]',
+        'tp-yt-paper-button[aria-label*="akzeptieren" i]',
+        'ytd-button-renderer button',
+      ];
+      for (const sel of selectors) {
+        const el = document.querySelector(sel) as HTMLElement | null;
+        if (el && el.offsetParent !== null) {
+          el.click();
+          return true;
+        }
+      }
+      return false;
+    });
+    if (clicked) {
+      await page.waitForTimeout(1200);
+      log.info("Script-based consent click succeeded (browser-agent)");
+      return true;
+    }
+  } catch { /* ignore */ }
+  return false;
+}
+
+async function tryIframeConsentClick(page: Page): Promise<boolean> {
+  for (const frame of page.frames()) {
+    if (frame === page.mainFrame()) continue;
+    try {
+      const clicked = await frame.evaluate(() => {
+        const sels = [
+          'button[aria-label*="akzeptieren" i]',
+          'button[aria-label*="Accept" i]',
+          '[role="button"]',
+        ];
+        for (const sel of sels) {
+          const el = document.querySelector(sel) as HTMLElement | null;
+          if (el && el.offsetParent !== null && /akzeptieren|accept|zustimmen/i.test(el.getAttribute("aria-label") || el.innerText || "")) {
+            el.click();
+            return true;
+          }
+        }
+        return false;
+      });
+      if (clicked) {
+        await page.waitForTimeout(1200);
+        log.info("Iframe consent click succeeded (browser-agent)");
+        return true;
+      }
+    } catch { /* next frame */ }
+  }
+  return false;
+}
+
+async function recoverAfterConsentDeadlock(page: Page, depth = 0): Promise<void> {
+  if (depth > 2) return;
+  await page.waitForLoadState("networkidle", { timeout: 20000 }).catch(() => {});
+  await page.waitForTimeout(2000);
+  let len = await page.evaluate(() => document.body?.innerText?.trim().length || 0);
+  let blocked = await isPageBlocked(page);
+  if (!blocked && len >= 80) return;
+
+  log.warn("Post-consent recovery (browser-agent): reloading");
+  await tryScriptConsentClick(page);
+  await tryIframeConsentClick(page);
+  await dismissConsentBanners(page);
+  await page.waitForTimeout(1500);
+  len = await page.evaluate(() => document.body?.innerText?.trim().length || 0);
+  blocked = await isPageBlocked(page);
+  if (blocked || len < 80) {
+    try {
+      await page.reload({ waitUntil: "networkidle", timeout: 35000 });
+      await page.waitForTimeout(2500);
+      for (let i = 0; i < 3; i++) {
+        await dismissConsentBanners(page);
+        await tryScriptConsentClick(page);
+        await tryIframeConsentClick(page);
+        await page.waitForTimeout(600);
+      }
+      await recoverAfterConsentDeadlock(page, depth + 1);
+    } catch (e) {
+      log.warn(`reload after consent failed: ${e instanceof Error ? e.message : e}`);
+    }
+  }
+}
+
 /**
  * Dismiss cookie/consent banners by clicking the most minimal-consent option.
  * Tries multiple strategies covering Google, YouTube, GDPR/Datenschutz, and generic cookie popups.
@@ -316,6 +407,11 @@ async function dismissConsentBanners(page: Page): Promise<boolean> {
         break;
       }
     } catch { /* try next */ }
+  }
+
+  if (!dismissed) {
+    if (await tryScriptConsentClick(page)) dismissed = true;
+    if (!dismissed && (await tryIframeConsentClick(page))) dismissed = true;
   }
 
   if (!dismissed) {
@@ -819,6 +915,11 @@ export async function runBrowserAgent(
       if (!dismissed) break;
       await page.waitForTimeout(500);
     }
+    await tryScriptConsentClick(page);
+    await tryIframeConsentClick(page);
+    if (/youtube\.com/i.test(page.url()) || (await isPageBlocked(page))) {
+      await recoverAfterConsentDeadlock(page);
+    }
 
     // Take initial screenshot
     const dedup = createDedup();
@@ -874,7 +975,12 @@ NAVIGATION RULES:
 CLICKING RULES:
 - When using click_element, click the actual BUTTON or LINK text, not the heading or description above it. For example, if you see a card with heading "CSRD Guide" and a button "Download now", click "Download now" — NOT "CSRD Guide".
 - If a click does not change the page, you probably clicked a non-interactive element. Look at the screenshot for the actual button or link nearby and click THAT.
-- Common clickable texts: "Learn more", "Read more", "Download now", "Get started", "Contact us", "Sign up", "View details", "See more".`,
+- Headlines and CTAs usually live in the SAME card/section: always look for a short verb button ("Download now", "Learn more") inside that block before claiming the action is missing.
+- Common clickable texts: "Learn more", "Read more", "Download now", "Get started", "Contact us", "Sign up", "View details", "See more".
+
+CONSENT / PLATFORM NOISE:
+- Cookie and consent dialogs are not product bugs — use click_element on "Accept", "Alle akzeptieren", "I agree", etc. first.
+- On YouTube/Google, ignore system messages about history or ads policy; they are not the site under test.`,
       },
       {
         role: "user",

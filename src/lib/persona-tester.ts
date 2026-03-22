@@ -296,6 +296,168 @@ const TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   },
 ];
 
+/** Try direct DOM/script clicks for YouTube & GDPR dialogs (often outside normal role=button). */
+async function tryScriptConsentClick(page: Page): Promise<boolean> {
+  try {
+    const clicked = await page.evaluate(() => {
+      const selectors = [
+        'button[aria-label*="akzeptieren" i]',
+        'button[aria-label*="Akzeptieren" i]',
+        'button[aria-label*="Alle akzeptieren" i]',
+        'button[aria-label*="Accept" i]',
+        'button[aria-label*="Zustimmen" i]',
+        'button[aria-label*="Consent" i]',
+        'tp-yt-paper-button[aria-label*="akzeptieren" i]',
+        'ytd-button-renderer button',
+      ];
+      for (const sel of selectors) {
+        const el = document.querySelector(sel) as HTMLElement | null;
+        if (el && el.offsetParent !== null) {
+          el.click();
+          return true;
+        }
+      }
+      return false;
+    });
+    if (clicked) {
+      await page.waitForTimeout(1200);
+      log.info("Script-based consent click succeeded");
+      return true;
+    }
+  } catch { /* ignore */ }
+  return false;
+}
+
+async function tryIframeConsentClick(page: Page): Promise<boolean> {
+  for (const frame of page.frames()) {
+    if (frame === page.mainFrame()) continue;
+    try {
+      const clicked = await frame.evaluate(() => {
+        const sels = [
+          'button[aria-label*="akzeptieren" i]',
+          'button[aria-label*="Accept" i]',
+          '[role="button"]',
+        ];
+        for (const sel of sels) {
+          const el = document.querySelector(sel) as HTMLElement | null;
+          if (el && el.offsetParent !== null && /akzeptieren|accept|zustimmen/i.test(el.getAttribute("aria-label") || el.innerText || "")) {
+            el.click();
+            return true;
+          }
+        }
+        return false;
+      });
+      if (clicked) {
+        await page.waitForTimeout(1200);
+        log.info("Iframe consent click succeeded");
+        return true;
+      }
+    } catch { /* next frame */ }
+  }
+  return false;
+}
+
+/**
+ * After consent dismiss, YouTube sometimes shows a black/empty shell until reload.
+ * Waits for network, checks content; reloads and re-dismisses if still blocked.
+ */
+async function recoverAfterConsentDeadlock(page: Page, depth = 0): Promise<void> {
+  if (depth > 2) return;
+  await page.waitForLoadState("networkidle", { timeout: 20000 }).catch(() => {});
+  await page.waitForTimeout(2000);
+  let len = await page.evaluate(() => document.body?.innerText?.trim().length || 0);
+  let blocked = await isPageBlocked(page);
+  if (!blocked && len >= 80) return;
+
+  log.warn("Post-consent recovery: page still empty or overlay present, retrying consent + reload");
+  await tryScriptConsentClick(page);
+  await tryIframeConsentClick(page);
+  await dismissConsentBanners(page);
+  await page.waitForTimeout(1500);
+  len = await page.evaluate(() => document.body?.innerText?.trim().length || 0);
+  blocked = await isPageBlocked(page);
+  if (blocked || len < 80) {
+    try {
+      await page.reload({ waitUntil: "networkidle", timeout: 35000 });
+      await page.waitForTimeout(2500);
+      for (let i = 0; i < 3; i++) {
+        await dismissConsentBanners(page);
+        await tryScriptConsentClick(page);
+        await tryIframeConsentClick(page);
+        await page.waitForTimeout(600);
+      }
+      await recoverAfterConsentDeadlock(page, depth + 1);
+    } catch (e) {
+      log.warn(`reload after consent failed: ${e instanceof Error ? e.message : e}`);
+    }
+  }
+}
+
+/**
+ * When heading text is not clickable, find the nearest <a>/<button> within ~100px
+ * or inside the same card/container (matches "Download now" near "CSRD for Dummies").
+ */
+async function clickNearbyInteractive(page: Page, searchText: string): Promise<boolean> {
+  return page.evaluate((raw: string) => {
+    const search = raw.trim().toLowerCase();
+    if (!search) return false;
+    let anchor: Element | null = null;
+    const headings = Array.from(document.querySelectorAll("h1, h2, h3, h4, h5, h6"));
+    for (const el of headings) {
+      const t = (el as HTMLElement).innerText?.trim().toLowerCase() || "";
+      if (t.includes(search) || search.includes(t.slice(0, Math.min(48, t.length)))) {
+        anchor = el;
+        break;
+      }
+    }
+    if (!anchor) {
+      document.querySelectorAll("p, span, li").forEach((el) => {
+        if (anchor) return;
+        const t = (el as HTMLElement).innerText?.trim().toLowerCase() || "";
+        if (t.length > 0 && t.length < 400 && t.includes(search)) anchor = el;
+      });
+    }
+    if (!anchor) return false;
+    const rect = anchor.getBoundingClientRect();
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
+    const clickables = Array.from(
+      document.querySelectorAll('a, button, [role="button"], [role="link"], input[type="submit"]')
+    ) as HTMLElement[];
+    let best: HTMLElement | null = null;
+    let bestDist = Infinity;
+    for (const c of clickables) {
+      const r = c.getBoundingClientRect();
+      if (r.width < 2 || r.height < 2) continue;
+      const mx = r.left + r.width / 2;
+      const my = r.top + r.height / 2;
+      const d = Math.hypot(mx - cx, my - cy);
+      if (d < 140 && d < bestDist) {
+        bestDist = d;
+        best = c;
+      }
+    }
+    if (best) {
+      best.click();
+      return true;
+    }
+    const container =
+      anchor.closest(
+        'article, section, [class*="card"], [class*="block"], [class*="tile"], [class*="teaser"], [class*="hero"]'
+      ) || anchor.parentElement;
+    if (container) {
+      const inner = container.querySelector(
+        'a, button, [role="button"], [role="link"]'
+      ) as HTMLElement | null;
+      if (inner) {
+        inner.click();
+        return true;
+      }
+    }
+    return false;
+  }, searchText);
+}
+
 async function dismissConsentBanners(page: Page): Promise<boolean> {
   let dismissed = false;
 
@@ -327,6 +489,11 @@ async function dismissConsentBanners(page: Page): Promise<boolean> {
         break;
       }
     } catch { /* try next */ }
+  }
+
+  if (!dismissed) {
+    if (await tryScriptConsentClick(page)) dismissed = true;
+    if (!dismissed && (await tryIframeConsentClick(page))) dismissed = true;
   }
 
   if (!dismissed) {
@@ -495,6 +662,11 @@ export async function runPersonaTest(
       if (!dismissed) break;
       await page.waitForTimeout(500);
     }
+    await tryScriptConsentClick(page);
+    await tryIframeConsentClick(page);
+    if (/youtube\.com/i.test(page.url()) || (await isPageBlocked(page))) {
+      await recoverAfterConsentDeadlock(page);
+    }
 
     const dedup = createDedup();
 
@@ -557,6 +729,16 @@ INTERACTION PRECISION — Distinguish CTA from descriptive text:
 - Web pages contain two types of text: (1) INTERACTIVE elements — buttons, links, CTAs with short action verbs like "Download now", "Learn more", "Get started", "Sign up" — and (2) DESCRIPTIVE text — headings, labels, paragraphs, promotional copy.
 - ONLY click interactive elements. A heading like "CSRD for Dummies" or a description like "Download your go-to resource for effortless implementation" is NOT a button — the actual CTA is the "Download now" button nearby.
 - If you see a card/banner with a long title and a short action button, ALWAYS click the action button text, NEVER the title.
+
+VISUAL-LINK / CONTAINER MAPPING — Never claim a CTA is "missing" without checking the same block:
+- Marketing cards place the headline (e.g. "CSRD for Dummies") and the real button ("Download now") inside the SAME card/section/article. The headline is almost never clickable — the button is a sibling or child in that container.
+- If you wanted to interact with a topic but only the heading matched your goal, STOP and look for short verb CTAs in THAT SAME card: "Download now", "Learn more", "Read more", "Get started". Click that exact label — do NOT report "button not found" if you only tried the long title text.
+- If click_element says it used a "nearby-CTA fallback", that means the engine found the real button next to your text — trust it and continue testing instead of filing a bug.
+- Forbidden: reporting "I cannot find Download now" when you have not yet tried click_element("Download now") or the exact CTA string shown in the same section as the heading.
+
+PLATFORM NOISE (YouTube, Google, etc.) — Not product bugs:
+- Messages like "YouTube-Verlauf ist deaktiviert" / "Watch history is off" / "Personalized ads" are normal platform policies, NOT defects in the site you are reviewing. Ignore them for buySignal and continue using search, sidebar, or navigation.
+- After dismissing consent, the page may briefly look dark or empty — wait for content or scroll before concluding "blank screen". Do not attribute platform cookie flows to the product under test.
 
 SELF-CORRECTION PROTOCOL — Before reporting any bug:
 1. If a click "did nothing", STOP. Ask yourself: "Did I click a heading, label, or description instead of the actual button/link?" If YES, find the real CTA nearby and try THAT first.
@@ -687,6 +869,11 @@ NAVIGATION RULES:
                 }
                 await page.waitForTimeout(1000);
                 await dismissConsentBanners(page);
+                await tryScriptConsentClick(page);
+                await tryIframeConsentClick(page);
+                if (/youtube\.com/i.test(page.url()) || (await isPageBlocked(page))) {
+                  await recoverAfterConsentDeadlock(page);
+                }
                 screenshot = await captureScreenshot(page, dedup) || undefined;
                 resultText = `Navigated to ${args.url}. Title: "${await page.title()}".${screenshot ? " Screenshot attached." : " (Page unchanged)"}`;
                 break;
@@ -706,21 +893,55 @@ NAVIGATION RULES:
                     }
                   }
                   if (!clicked) {
-                    await page.getByText(clickText, { exact: false }).first().click();
+                    try {
+                      await page.getByText(clickText, { exact: false }).first().click();
+                      clicked = true;
+                    } catch {
+                      const near = await clickNearbyInteractive(page, clickText);
+                      if (near) {
+                        clicked = true;
+                        onEvent?.(`↳ resolved nearby CTA for "${clickText}"`);
+                      }
+                    }
                   }
                   await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
                   await page.waitForTimeout(800);
                   await dismissConsentBanners(page);
+                  if (/youtube\.com/i.test(page.url())) {
+                    await tryScriptConsentClick(page);
+                    await recoverAfterConsentDeadlock(page);
+                  }
                   screenshot = await captureScreenshot(page, dedup) || undefined;
                   const samePage = page.url() === urlBeforeClick;
                   resultText = `Clicked "${clickText}". Now on: ${page.url()}.`;
-                  if (samePage) {
-                    resultText += " NOTE: The page did NOT change — you may have clicked a non-interactive element (heading or label). Look for the actual button or link nearby (e.g. 'Download now', 'Learn more') and click THAT instead. Do NOT report this as a bug unless you also tried the actual button.";
+                  if (samePage && clicked) {
+                    const near2 = await clickNearbyInteractive(page, clickText);
+                    if (near2) {
+                      await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
+                      await page.waitForTimeout(600);
+                      await dismissConsentBanners(page);
+                      screenshot = await captureScreenshot(page, dedup) || undefined;
+                      resultText = `Clicked "${clickText}" (used nearby-CTA fallback). Now on: ${page.url()}.`;
+                      if (page.url() !== urlBeforeClick) {
+                        resultText += " Navigation occurred after nearby-CTA click.";
+                      }
+                    } else {
+                      resultText += " NOTE: The page did NOT change — you may have clicked a non-interactive element (heading or label). Look for the actual button or link in the SAME card/container (e.g. 'Download now', 'Learn more') and click THAT. Do NOT report 'button missing' until you try the CTA text inside the same section.";
+                    }
                   }
                   if (screenshot) resultText += " Screenshot attached.";
                 } catch {
-                  screenshot = await captureScreenshot(page, dedup) || undefined;
-                  resultText = `Could not click "${clickText}" — element not found or not clickable.${screenshot ? " Screenshot attached." : ""}`;
+                  const near3 = await clickNearbyInteractive(page, clickText);
+                  if (near3) {
+                    await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
+                    await page.waitForTimeout(800);
+                    await dismissConsentBanners(page);
+                    screenshot = await captureScreenshot(page, dedup) || undefined;
+                    resultText = `Clicked "${clickText}" via nearby-CTA fallback. Now on: ${page.url()}.${screenshot ? " Screenshot attached." : ""}`;
+                  } else {
+                    screenshot = await captureScreenshot(page, dedup) || undefined;
+                    resultText = `Could not click "${clickText}" — element not found or not clickable. Try the exact CTA label (e.g. "Download now") in the same card as the heading.${screenshot ? " Screenshot attached." : ""}`;
+                  }
                 }
                 break;
               }
