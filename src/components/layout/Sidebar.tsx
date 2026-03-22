@@ -1,108 +1,125 @@
 "use client";
 
-import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
-import { useTheme } from "@/components/ThemeProvider";
+import { AppStage, AppView } from "@/types/pipeline";
+import { Plus, FolderOpen, LayoutDashboard, Search, Settings, ChevronRight } from "lucide-react";
 
-const navItems = [
-  { href: "/", icon: "settings_input_component", label: "Configure Run" },
-  { href: "/progress", icon: "terminal", label: "Live Progress" },
-  { href: "/report", icon: "analytics", label: "Morning Report" },
-  { href: "/settings", icon: "tune", label: "Settings" },
-];
+interface SidebarProps {
+  currentStage: AppStage;
+  currentView?: AppView;
+  currentUrl?: string;
+  onNewAnalysis: () => void;
+  onOpenDocuments: () => void;
+  onReturnToWorkspace?: () => void;
+  onCancelAnalysis?: () => void;
+}
 
-export default function Sidebar() {
-  const pathname = usePathname();
-  const router = useRouter();
-  const { theme, toggle } = useTheme();
-
-  const handleNavClick = (e: React.MouseEvent, href: string) => {
-    if (pathname === href) {
-      e.preventDefault();
-      // Force full reload when clicking the already-active nav item
-      window.location.href = href;
+export function Sidebar({ currentStage, currentView = "workspace", currentUrl, onNewAnalysis, onOpenDocuments, onReturnToWorkspace, onCancelAnalysis }: SidebarProps) {
+  const getStageLabel = () => {
+    switch (currentStage) {
+      case "idle": return "Ready";
+      case "tracing": return "Reconnaissance";
+      case "selection": return "User Selection";
+      case "simulating": return "Live Simulation";
+      case "dashboard": return "Insight Dashboard";
+      case "documents": return "Document Library";
+      default: return "";
     }
   };
 
   return (
-    <aside className="hidden lg:flex flex-col h-screen fixed left-0 top-0 border-r border-outline-variant/10 bg-[var(--sidebar-bg)] w-64 z-50 shadow-[40px_0_40px_-20px_rgba(164,201,255,0.06)]">
-      <div className="px-6 py-8">
+    <div className="w-64 h-screen fixed left-0 top-0 bg-[#020617] border-r border-slate-800/60 flex flex-col z-50">
+      
+      {/* Brand Header */}
+      <div className="h-16 flex items-center px-4 border-b border-slate-800/60">
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded bg-primary flex items-center justify-center">
-            <span className="material-symbols-outlined text-on-primary text-xl">
-              visibility
-            </span>
+          <div className="w-8 h-8 bg-blue-600/10 border border-blue-500/30 rounded-lg flex items-center justify-center text-blue-500 font-bold shadow-[0_0_15px_rgba(37,99,235,0.15)]">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M12 2L2 22H22L12 2Z" fill="currentColor"/>
+            </svg>
           </div>
-          <div>
-            <h1 className="text-lg font-black text-[#A4C9FF] font-headline uppercase tracking-tighter">
-              Nightshift
-            </h1>
-            <p className="text-[10px] text-[var(--on-surface-variant)] font-mono uppercase tracking-widest">
-              The Kinetic Observer
-            </p>
+          <span className="text-xl font-bold tracking-tight text-white flex items-center gap-1">
+            MarketMirror
+          </span>
+        </div>
+      </div>
+
+      {/* Workspace Status */}
+      <div className="p-4 flex-1">
+        <div className="text-[10px] uppercase tracking-widest text-slate-500 font-semibold mb-3">
+          Current Workspace
+        </div>
+        
+        <div 
+          onClick={() => {
+            if (currentUrl && onReturnToWorkspace) {
+              onReturnToWorkspace();
+            }
+          }}
+          className={`rounded-lg p-3 space-y-3 transition-all ${
+            currentUrl 
+              ? currentView === "workspace"
+                ? "bg-blue-900/10 border border-blue-500/30 shadow-[0_0_15px_rgba(37,99,235,0.05)] cursor-default"
+                : "bg-slate-900/50 border border-slate-800 hover:border-slate-700 hover:bg-slate-900 cursor-pointer group"
+              : "bg-slate-900/30 border border-slate-800/50 cursor-default"
+          }`}
+        >
+          {currentUrl ? (
+            <div>
+              <div className="flex items-center justify-between">
+                <div className="text-[10px] text-slate-500 uppercase">Target URL</div>
+                {currentView === "documents" && (
+                  <div className="text-[10px] text-blue-400 opacity-0 group-hover:opacity-100 transition-opacity flex items-center">
+                    Resume <ChevronRight className="w-3 h-3 ml-0.5" />
+                  </div>
+                )}
+              </div>
+              <div className="text-sm font-mono text-slate-300 truncate mt-1" title={currentUrl}>
+                {currentUrl.replace(/^https?:\/\//, '')}
+              </div>
+            </div>
+          ) : (
+            <div className="text-sm text-slate-500 italic">No active session</div>
+          )}
+
+          <div className={`pt-2 border-t ${currentUrl && currentView === "workspace" ? "border-blue-500/20" : "border-slate-800/50"}`}>
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-slate-400">Status</span>
+              <span className={`text-xs font-semibold ${currentUrl && currentView === "workspace" ? "text-blue-400" : "text-slate-500"}`}>{getStageLabel()}</span>
+            </div>
+            {currentUrl && onCancelAnalysis && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onCancelAnalysis();
+                }}
+                className="w-full mt-3 py-1.5 px-2 text-[10px] font-semibold border border-red-500/30 text-red-400 rounded hover:bg-red-500/10 transition-colors uppercase tracking-widest"
+              >
+                {currentStage === "dashboard" ? "Clear Workspace" : "Cancel Analysis"}
+              </button>
+            )}
           </div>
         </div>
       </div>
 
-      <nav className="flex-1 px-4 space-y-1">
-        {navItems.map((item) => {
-          const isActive = pathname === item.href;
-          return (
-            <Link
-              key={item.href}
-              href={item.href}
-              onClick={(e) => handleNavClick(e, item.href)}
-              className={`flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-150 font-mono text-sm ${
-                isActive
-                  ? "bg-[var(--sidebar-active-bg)] text-[var(--sidebar-active-text)] border-r-2 border-[var(--sidebar-active-text)] translate-x-1"
-                  : "text-[var(--sidebar-text)] hover:bg-[var(--sidebar-active-bg)]"
-              }`}
-            >
-              <span className="material-symbols-outlined">{item.icon}</span>
-              <span>{item.label}</span>
-            </Link>
-          );
-        })}
-      </nav>
-
-      <div className="px-4 py-6 border-t border-outline-variant/10">
-        <button
-          onClick={() => window.location.href = "/"}
-          className="w-full bg-gradient-to-br from-primary to-primary-container text-on-primary-container font-bold py-3 rounded-xl mb-6 shadow-lg shadow-primary/10 flex items-center justify-center gap-2"
+      {/* Navigation Actions */}
+      <div className="p-4 space-y-2 border-t border-slate-800/60">
+        <button 
+          onClick={onNewAnalysis}
+          className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors ${currentStage === "idle" ? "bg-blue-600 text-white shadow-lg" : "text-slate-300 hover:bg-slate-800 hover:text-white"}`}
         >
-          <span className="material-symbols-outlined text-sm">add</span>
+          <Plus className="w-4 h-4" />
           New Analysis
         </button>
-        <div className="space-y-1">
-          <button
-            onClick={toggle}
-            className="flex items-center gap-3 px-4 py-2 text-[var(--sidebar-text)] hover:bg-[var(--sidebar-active-bg)] text-xs font-mono w-full rounded transition-colors"
-          >
-            <span className="material-symbols-outlined text-sm">
-              {theme === "dark" ? "light_mode" : "dark_mode"}
-            </span>
-            <span>{theme === "dark" ? "Light Mode" : "Dark Mode"}</span>
-          </button>
-          <a
-            href="#"
-            className="flex items-center gap-3 px-4 py-2 text-[var(--sidebar-text)] hover:bg-[var(--sidebar-active-bg)] text-xs font-mono"
-          >
-            <span className="material-symbols-outlined text-sm">
-              description
-            </span>
-            <span>Documentation</span>
-          </a>
-          <a
-            href="#"
-            className="flex items-center gap-3 px-4 py-2 text-[var(--sidebar-text)] hover:bg-[var(--sidebar-active-bg)] text-xs font-mono"
-          >
-            <span className="material-symbols-outlined text-sm">
-              help_outline
-            </span>
-            <span>Support</span>
-          </a>
-        </div>
+
+        <button 
+          onClick={onOpenDocuments}
+          className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors ${currentView === "documents" ? "bg-blue-900/40 border border-blue-800/50 text-blue-400" : "text-slate-300 hover:bg-slate-800 hover:text-white"}`}
+        >
+          <FolderOpen className="w-4 h-4" />
+          Document Library
+        </button>
       </div>
-    </aside>
+
+    </div>
   );
 }
